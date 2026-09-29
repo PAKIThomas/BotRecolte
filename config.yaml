@@ -1,0 +1,157 @@
+# =============================================================================
+#  BotRecolte : configuration
+#  Toutes les coordonnées d'écran sont en POINTS macOS (celles de pyautogui),
+#  pas en pixels Retina. La conversion est gérée par `ecran.echelle`.
+# =============================================================================
+
+# --- Raccourcis clavier (pynput) ---------------------------------------------
+# Une lettre ("n"), une touche spéciale ("f8", "f9", "esc", "space"...).
+# Sur Mac, les touches F peuvent être prises par le système : utilisez fn+F8
+# ou des lettres.
+raccourcis:
+  scanner: "n"          # lance un scan + récolte (ou un scan de test en mode test)
+  pause: "p"            # pause / reprise
+  arret_urgence: "w"    # arrêt immédiat de l'action en cours
+  quitter_sur_urgence: false   # true : l'arrêt d'urgence ferme aussi le programme
+
+# --- Écran / capture ---------------------------------------------------------
+ecran:
+  # Facteur pixels physiques / points. "auto" = mesuré à la capture
+  # (2.0 sur un écran Retina). Forcer une valeur si la calibration l'exige.
+  echelle: auto
+  # Zone de jeu à analyser, en points. MacBook Air/Pro M1 13" = 1440x900 points
+  # par défaut. On exclut la barre d'interface du bas (sorts, chat...).
+  zone_jeu: {left: 0, top: 0, width: 1440, height: 760}
+  # Rectangles à ignorer dans la zone de jeu (points) : minimap, boutons, etc.
+  zones_exclues:
+    - {left: 0, top: 0, width: 260, height: 60}      # bandeau haut gauche (à ajuster)
+    # - {left: 1300, top: 0, width: 140, height: 140}
+
+# --- Fenêtre / sécurité ------------------------------------------------------
+securite:
+  # Nom (ou partie du nom) de l'application au premier plan autorisée.
+  applications_autorisees: ["Dofus"]
+  verifier_premier_plan: true
+  # Nombre maximal de candidats d'affilée sans infobulle lisible avant arrêt.
+  max_introuvables_consecutifs: 4
+  # Nombre maximal de passes de vérification par carte avant arrêt.
+  max_passes_par_carte: 4
+  # Vérifier les alertes (combat, inventaire plein...) avant chaque clic.
+  alertes_avant_chaque_clic: true
+  # Seuil du template matching pour les images de assets/alertes/.
+  seuil_alerte: 0.85
+  # Ctrl+coin haut gauche de l'écran = arrêt de pyautogui (sécurité native).
+  failsafe_coin_ecran: true
+
+# --- Détection ---------------------------------------------------------------
+detection:
+  detecteur: hsv_template        # module interchangeable (voir vision.py)
+  # Surface d'un candidat (en points², convertie en pixels selon l'échelle).
+  aire_min: 120
+  aire_max: 6000
+  # Rapport hauteur/largeur accepté pour un contour (les épis sont hauts).
+  ratio_min: 0.4
+  ratio_max: 4.0
+  # Noyau morphologique (pixels physiques) pour nettoyer le masque.
+  noyau_morpho: 5
+  # Seuil de template matching (TM_CCOEFF_NORMED) pour les images mûres.
+  seuil_template: 0.72
+  # Échelles testées pour le template matching (1.0 = taille de l'image source).
+  echelles_template: [0.8, 0.9, 1.0, 1.1, 1.2]
+  # Si une image "épuisée" correspond mieux que "mûre" + marge -> rejet.
+  marge_epuisee: 0.05
+  # Distance (points) sous laquelle deux candidats sont fusionnés.
+  distance_fusion: 25
+  # Garder les candidats trouvés uniquement par la couleur (sans template).
+  garder_couleur_seule: true
+
+# --- Céréales ----------------------------------------------------------------
+# Plages HSV OpenCV (H: 0-180, S: 0-255, V: 0-255). Plusieurs plages possibles.
+# `calibre: false` = valeurs estimées, à affiner avec `python main.py hsv`.
+# Blé et orge sont estimés à partir des icônes fournies ; à confirmer en jeu.
+cereales:
+  ble:        {nom: "Blé",        calibre: false, hsv: [[[16, 110, 140], [28, 255, 255]]]}
+  orge:       {nom: "Orge",       calibre: false, hsv: [[[30, 90, 110], [40, 255, 255]]]}
+  avoine:     {nom: "Avoine",     calibre: false, hsv: [[[18, 60, 130], [30, 190, 255]]]}
+  houblon:    {nom: "Houblon",    calibre: false, hsv: [[[38, 80, 90], [60, 255, 255]]]}
+  lin:        {nom: "Lin",        calibre: false, hsv: [[[95, 60, 110], [125, 255, 255]]]}
+  seigle:     {nom: "Seigle",     calibre: false, hsv: [[[10, 70, 100], [20, 220, 230]]]}
+  riz:        {nom: "Riz",        calibre: false, hsv: [[[20, 30, 160], [35, 140, 255]]]}
+  malt:       {nom: "Malt",       calibre: false, hsv: [[[12, 100, 110], [22, 255, 230]]]}
+  chanvre:    {nom: "Chanvre",    calibre: false, hsv: [[[40, 70, 70], [75, 255, 220]]]}
+  mais:       {nom: "Maïs",       calibre: false, hsv: [[[22, 140, 170], [32, 255, 255]]]}
+  millet:     {nom: "Millet",     calibre: false, hsv: [[[15, 80, 120], [26, 220, 240]]]}
+  frostiflax: {nom: "Frostiflax", calibre: false, hsv: [[[85, 40, 150], [110, 200, 255]]]}
+  quisnoa:    {nom: "Quisnoa",    calibre: false, hsv: [[[0, 80, 110], [10, 255, 255]]]}
+
+# --- Infobulle (validation au survol) ----------------------------------------
+infobulle:
+  delai_apparition: 0.35        # secondes d'attente après le survol
+  delai_jitter: 0.12            # variation aléatoire ajoutée au délai
+  essais: 2                     # nouvelles lectures si l'infobulle est illisible
+  # Zone de recherche autour du curseur (points, relatif au curseur).
+  zone: {dx: -220, dy: -160, width: 440, height: 320}
+  seuil_template: 0.80
+  ocr_secours: true             # utilise pytesseract s'il est installé
+  mots_faucher: ["faucher"]
+  mots_epuisee: ["épuisée", "epuisee", "épuisé", "epuise"]
+
+# --- Surbrillance / fin de file ----------------------------------------------
+file_attente:
+  seuil_surbrillance: 0.78      # template matching assets/surbrillance/
+  # Plage HSV optionnelle de la surbrillance (null = désactivée).
+  hsv_surbrillance: null        # ex. [[[0, 0, 240], [180, 40, 255]]]
+  intervalle_verif: 1.5         # secondes entre deux vérifications
+  verifs_confirmation: 2        # vérifs consécutives sans surbrillance = fini
+  timeout: 180                  # secondes max d'attente de la file
+  # Repli si aucune image/plage de surbrillance n'est fournie : on attend que
+  # l'image soit stable (le personnage ne bouge plus) pendant X secondes.
+  repli_stabilite_secondes: 4.0
+  repli_seuil_mouvement: 0.004  # fraction de pixels qui changent
+  # Rayon (points) autour d'une surbrillance pour ignorer un candidat.
+  rayon_ignorer: 30
+
+# --- Souris humaine ----------------------------------------------------------
+souris:
+  vitesse: 1.0                  # multiplicateur global (>1 = plus rapide)
+  duree_min: 0.12               # durée min d'un déplacement (s)
+  duree_max: 0.65               # durée max d'un déplacement (s)
+  duree_par_1000px: 0.30        # durée additionnelle par 1000 points
+  courbure: 0.22                # amplitude des points de contrôle de Bézier
+  bruit: 1.2                    # bruit (points) ajouté le long du trajet
+  proba_depassement: 0.18       # probabilité de dépasser légèrement la cible
+  depassement_max: 9            # amplitude max du dépassement (points)
+  pas_par_seconde: 120          # fréquence des positions intermédiaires
+  # Point de clic : décalage aléatoire dans la boîte de la ressource,
+  # en fraction de sa demi-taille (jamais le centre exact).
+  zone_clic: 0.45
+  appui_min: 0.045              # durée d'appui du clic (s)
+  appui_max: 0.12
+
+# --- Délais entre actions ----------------------------------------------------
+# Distribution log-normale : médiane + dispersion (sigma), bornée.
+delais:
+  entre_clics: {mediane: 0.28, sigma: 0.45, min: 0.12, max: 1.2}
+  apres_survol: {mediane: 0.08, sigma: 0.5, min: 0.02, max: 0.4}
+  # Petites pauses irrégulières (probabilité par action).
+  proba_micro_pause: 0.07
+  micro_pause: {mediane: 0.9, sigma: 0.5, min: 0.4, max: 2.5}
+
+# --- Sons (macOS afplay) -----------------------------------------------------
+sons:
+  actif: true
+  fin_carte: "/System/Library/Sounds/Glass.aiff"
+  erreur: "/System/Library/Sounds/Basso.aiff"
+  arret: "/System/Library/Sounds/Sosumi.aiff"
+  pause: "/System/Library/Sounds/Pop.aiff"
+  info: "/System/Library/Sounds/Tink.aiff"
+
+# --- Debug / phase de test ---------------------------------------------------
+debug:
+  # true : le bot ne clique jamais, il détecte et enregistre des captures
+  # annotées (équivalent au mode "Test détection" de l'interface).
+  actif: false
+  dossier: "debug"
+  survol_en_test: true          # en test : survole les candidats pour lire l'infobulle (sans clic)
+  enregistrer_extraits: true    # enregistre chaque candidat découpé (pour créer des templates)
+  taille_extrait: 90            # côté de l'extrait en points

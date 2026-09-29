@@ -1,0 +1,11 @@
+# Python 3.11+ (macOS, Apple Silicon)
+pyautogui>=0.9.54
+pynput>=1.7.6
+mss>=9.0.1
+opencv-python>=4.9
+numpy>=1.26
+pyyaml>=6.0
+
+# Optionnels
+# pyobjc-framework-Cocoa>=10.0   # détection plus rapide de l'app au premier plan (AppKit)
+# pytesseract>=0.3.10            # OCR de secours des infobulles (+ brew install tesseract tesseract-lang)
