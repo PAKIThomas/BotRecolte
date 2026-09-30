@@ -9,3 +9,4 @@ dataset/
 modeles/*.pt
 modeles/*.json
 *.pt
+memoire_cartes/

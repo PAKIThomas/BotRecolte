@@ -49,6 +49,8 @@ class Collecteur:
         self.dossier = Path(self.a.get("dossier", "apprentissage"))
         self._verrou = threading.Lock()
         self._derniere_carte: tuple[str, np.ndarray, float] | None = None   # nom, image, horodatage
+        # Appelé après chaque capture Maj+O / Maj+E : rappel(frame, px, py, type_).
+        self.rappel = None
         self._auto_ce_scan = 0
 
     # ------------------------------------------------------------ utilitaires
@@ -152,6 +154,8 @@ class Collecteur:
                     break
                 time.sleep(0.05)
             chemin = self.enregistrer(frame, x, y, type_, "manuel", detail=detail)
+            if self.rappel:
+                self.rappel(frame, px, py, type_)
             log.info("   ✔ %s (%s) — total %s : %d", chemin, "sans survol" if detail == "au_repos"
                      else "SURVOLÉE (souris pas écartée)", libelle.lower(), self.compter(type_))
             if sons:

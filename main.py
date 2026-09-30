@@ -10,6 +10,7 @@
   python main.py evaluer [--appliquer]
   python main.py annoter [--cereales avoine,ble]   (IA : annoter les cartes)
   python main.py entrainer                         (IA : entraîner le modèle)
+  python main.py cartes [--nommer ID NOM] [--oublier ID]   (mémoire des cartes)
 """
 
 from __future__ import annotations
@@ -314,6 +315,8 @@ def lancer_bot(cfg: dict, choix: dict):
 
     maj_enfoncee = {"etat": False}
     collecteur = recolteur.collecteur
+    # Maj+O / Maj+E mettent aussi à jour la mémoire des cartes.
+    collecteur.rappel = recolteur.depuis_capture
 
     def est_maj(touche) -> bool:
         return touche in (
@@ -1033,6 +1036,24 @@ def main():
         help="repasser aussi sur les cartes déjà validées",
     )
 
+    pca = sous.add_parser(
+        "cartes",
+        help="mémoire des cartes : lister, nommer, oublier",
+    )
+
+    pca.add_argument(
+        "--oublier",
+        metavar="ID",
+        help="efface une carte de la mémoire (ex. carte_003)",
+    )
+
+    pca.add_argument(
+        "--nommer",
+        nargs=2,
+        metavar=("ID", "NOM"),
+        help='donne un nom à une carte (ex. carte_003 "Champs Astrub")',
+    )
+
     pen = sous.add_parser(
         "entrainer",
         help="IA : entraîner le modèle sur les cartes annotées",
@@ -1188,6 +1209,26 @@ def main():
             cereales_arg or list(cfg["cereales"]),
             tout_revoir=args.tout,
         )
+
+        return
+
+    if args.commande == "cartes":
+        from memoire import MemoireCartes
+
+        memoire = MemoireCartes(cfg)
+
+        if args.oublier:
+            ok = memoire.oublier(args.oublier)
+            log.info("%s %s", "Carte oubliée :" if ok else "Carte inconnue :", args.oublier)
+
+        elif args.nommer:
+            ok = memoire.renommer(*args.nommer)
+            log.info("%s %s", "Carte renommée :" if ok else "Carte inconnue :", args.nommer[0])
+
+        log.info("Mémoire des cartes : %s", memoire.resume())
+
+        for ligne in memoire.lister():
+            print("  " + ligne)
 
         return
 

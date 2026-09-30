@@ -26,6 +26,7 @@ from pathlib import Path
 import vision
 from apprentissage import Collecteur
 from ia import DetecteurIA, EnregistreurCartes
+from memoire import MemoireCartes
 from mouse import ArretDemande, SourisHumaine
 from safety import Etat, Sons, dofus_au_premier_plan
 
@@ -51,6 +52,11 @@ class Recolteur:
         self.dossier_debug = Path(cfg["debug"]["dossier"])
         self.collecteur = Collecteur(cfg)
         self.enregistreur = EnregistreurCartes(cfg)
+        self.memoire = MemoireCartes(cfg)
+        self.carte_id: str | None = None
+        self.dernier_point: tuple[float, float] = (0.0, 0.0)
+        if self.memoire.actif:
+            log.info("Mémoire des cartes : %s", self.memoire.resume())
         # Délai d'apparition de l'infobulle, appris au fil des survols.
         self._delais_infobulle: list[float] = []
         if isinstance(self.detecteur, DetecteurIA):
@@ -105,6 +111,10 @@ class Recolteur:
             self.sons.jouer("erreur")
         finally:
             capture.fermer()
+            try:
+                self.memoire.sauver()
+            except Exception:
+                log.exception("Mémoire des cartes non sauvegardée")
 
     # --------------------------------------------------------------- analyse
 
@@ -123,10 +133,26 @@ class Recolteur:
             self.enregistreur.enregistrer(travail)       # dataset de l'IA (sans doublons)
         except Exception:
             log.debug("Carte non enregistrée", exc_info=True)
-        candidats = self.detecteur.detecter(travail, self.cereales)
+        # Mémoire des cartes : reconnaissance de la carte et positions connues.
+        memo: list[vision.Candidat] = []
+        if self.memoire.actif:
+            self.carte_id, ressemblance, nouvelle = self.memoire.reconnaitre(travail)
+            memo = self.memoire.candidats(frame, self.carte_id, self.cereales)
+            if nouvelle:
+                log.info("🗺  Nouvelle carte : %s (elle sera mémorisée au fil des récoltes).", self.carte_id)
+            else:
+                log.info("🗺  Carte reconnue : %s (ressemblance %.0f %%) — %d position(s) connue(s).",
+                         self.carte_id, 100 * ressemblance, len(memo))
+        utiliser_detection = not memo or self.cfg.get("memoire", {}).get("detection_sur_carte_connue", True)
+        candidats = self.detecteur.detecter(travail, self.cereales) if utiliser_detection else []
         f = frame.echelle / travail.echelle
         for c in candidats:
             c.x, c.y, c.w, c.h = int(c.x * f), int(c.y * f), int(c.w * f), int(c.h * f)
+        if memo:
+            # Les positions mémorisées remplacent les détections au même endroit.
+            r = self.cfg.get("memoire", {}).get("rayon", 15) * frame.echelle
+            candidats = memo + [c for c in candidats
+                                if all((c.x - m.x) ** 2 + (c.y - m.y) ** 2 > r * r for m in memo)]
         vision.filtrer_zones_exclues(frame, candidats, self.zones_exclues)
         surb = self.surbrillance.positions(frame) if self.surbrillance.operationnel else []
         vision.ignorer_surbrillance(frame, candidats, surb, self.cfg["file_attente"]["rayon_ignorer"])
@@ -176,6 +202,9 @@ class Recolteur:
             return False, "Épuisé"
         if verdict == L.FAUCHER:
             return True, "Faucher"
+        if c.source == "memoire":
+            # Position connue mais maturité inconnue : l'infobulle décide seule.
+            return False, "pas d'infobulle à la position mémorisée"
         if politique == "exigee":
             return False, "infobulle illisible"
         par_image = c.source != "couleur"
@@ -220,6 +249,7 @@ class Recolteur:
         for essai in range(1 + cfg_ib.get("essais", 1)):
             px, py = souris.point_dans_boite(cx, cy, w, h, self.cfg["souris"]["zone_clic"])
             souris.deplacer(px, py)
+            self.dernier_point = (px, py)
             debut = time.monotonic()
             souris.dormir(cfg_ib.get("delai_min", 0.06) * random.uniform(0.8, 1.3))
             limite = debut + self.delai_max_infobulle()
@@ -233,6 +263,29 @@ class Recolteur:
                 self._noter_delai(time.monotonic() - debut)
                 break
         return verdict, detail, fb
+
+    def memoriser(self, c: vision.Candidat, verdict: str):
+        """Met à jour la mémoire de la carte après lecture d'une infobulle."""
+        if not self.memoire.actif:
+            return
+        L = vision.LecteurInfobulle
+        if verdict in (L.FAUCHER, L.EPUISEE):
+            self.memoire.confirmer(self.carte_id, *self.dernier_point, c.cereale, verdict)
+        elif c.source == "memoire" and verdict == L.INCONNU:
+            self.memoire.echec(self.carte_id, *self.dernier_point)
+
+    def depuis_capture(self, frame: vision.Frame, px: float, py: float, type_: str):
+        """Maj+O / Maj+E : ajoute ou retire la position dans la mémoire de la carte."""
+        if not self.memoire.actif:
+            return
+        ident, _, nouvelle = self.memoire.reconnaitre(frame)
+        if type_ == "mure":
+            self.memoire.ajouter_manuel(ident, px, py)
+            log.info("   🗺  %s%s : position (%.0f, %.0f) ajoutée à la mémoire.", ident,
+                     " (nouvelle carte)" if nouvelle else "", px, py)
+        elif self.memoire.retirer(ident, px, py):
+            log.info("   🗺  %s : position (%.0f, %.0f) retirée de la mémoire.", ident, px, py)
+        self.memoire.sauver()
 
     def delai_max_infobulle(self) -> float:
         """Attente max de l'infobulle : config, ou apprise (délai habituel
@@ -273,7 +326,7 @@ class Recolteur:
                 self.verifier_premier_plan()
                 if cfg_s.get("alertes_avant_chaque_clic", True):
                     self.verifier_alertes(capture)
-                if c.score >= seuil_direct and c.source != "couleur":
+                if c.score >= seuil_direct and c.source not in ("couleur", "memoire"):
                     cx, cy = frame.vers_points(c.x, c.y)
                     souris.deplacer(*souris.point_dans_boite(cx, cy, c.w / frame.echelle, c.h / frame.echelle,
                                                              self.cfg["souris"]["zone_clic"]))
@@ -283,6 +336,7 @@ class Recolteur:
                     verdict, detail, _ = self.lire_infobulle(capture, souris, c, frame)
                     cliquer, raison = self.decider(verdict, c)
                     self.collecteur.collecte_auto(frame, c, verdict, detail)
+                    self.memoriser(c, verdict)
                 if cliquer:
                     self.verifier_premier_plan()         # dernière vérif juste avant le clic
                     souris.attendre("apres_survol")
@@ -387,6 +441,7 @@ class Recolteur:
                 verdict, detail, fb = self.lire_infobulle(capture, souris, c, frame)
                 cliquerait, raison = self.decider(verdict, c)
                 self.collecteur.collecte_auto(frame, c, verdict, detail)
+                self.memoriser(c, verdict)
                 c.statut = "valide" if cliquerait else ("rejete" if verdict == "epuisee" else "illisible")
                 c.raison = f"{verdict} → {'CLIQUERAIT' if cliquerait else 'pas de clic'} : {raison} ({detail})"
                 if fb is not None:

@@ -194,6 +194,23 @@ delais:
   proba_micro_pause: 0.03
   micro_pause: {mediane: 0.6, sigma: 0.5, min: 0.25, max: 1.8}
 
+# --- Mémoire des cartes : python main.py cartes --------------------------------
+# Les céréales d'une carte sont toujours au même endroit : le bot reconnaît la
+# carte (miniature du décor) et survole directement les positions connues.
+memoire:
+  actif: true
+  dossier: "memoire_cartes"
+  seuil_reconnaissance: 0.80    # ressemblance min (0..1) pour « même carte »
+  seuil_variante: 0.93          # en dessous : nouvel état de la carte mémorisé
+  max_variantes: 4
+  tolerance: 14                 # écart de gris toléré par pixel de la miniature
+  taille_signature: 192
+  rayon: 15                     # points : deux positions plus proches = même céréale
+  jitter: 3                     # points : petit décalage aléatoire du survol
+  max_echecs: 4                 # sans infobulle N fois d'affilée = position oubliée
+  # Sur une carte connue, chercher aussi de nouvelles céréales (IA/images).
+  detection_sur_carte_connue: true
+
 # --- IA (YOLO) : python main.py annoter / entrainer ---------------------------
 ia:
   dossier: "dataset"            # cartes + annotations

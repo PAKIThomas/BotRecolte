@@ -31,6 +31,8 @@ from datetime import datetime
 import cv2
 
 import ia
+import vision
+from memoire import MemoireCartes
 
 log = logging.getLogger("annoteur")
 
@@ -46,6 +48,7 @@ class Annoteur:
         self.cfg = cfg
         self.cereales = cereales
         self.etiq = ia.Etiquettes(cfg)
+        self.memoire = MemoireCartes(cfg)
         self.ids = self.etiq.liste()
         self.index = 0
         if not tout_revoir:
@@ -338,7 +341,28 @@ class Annoteur:
             return
         self._sauver(True)
         log.info("✔ Carte %s validée : %d céréale(s)", self.ids[self.index], len(self.donnees.get("boites", [])))
+        self._vers_memoire()
         self.aller(+1, sauver=False)
+
+    def _vers_memoire(self):
+        """Les céréales validées deviennent les positions mémorisées de la
+        carte : à chaque passage, le bot ira directement les vérifier."""
+        if not self.memoire.actif:
+            return
+        try:
+            d = self.donnees
+            z = self.cfg["ecran"]["zone_jeu"]
+            frame = vision.Frame(self.image, z["left"], z["top"], float(d.get("echelle", 1.0)))
+            ident, _, nouvelle = self.memoire.reconnaitre(frame)
+            for b in d.get("boites", []):
+                px, py = frame.vers_points(b["x"], b["y"])
+                self.memoire.confirmer(ident, px, py, b["cereale"], "annote", source="annotation")
+            self.memoire.sauver()
+            n = len(self.memoire.cartes.get(ident, {}).get("ressources", []))
+            log.info("   🗺  Mémoire %s%s : %d position(s) de céréales.", ident,
+                     " (nouvelle carte)" if nouvelle else "", n)
+        except Exception:
+            log.exception("Mise à jour de la mémoire des cartes impossible")
 
     def aller(self, pas: int, sauver: bool = True):
         if sauver and self.modifie:

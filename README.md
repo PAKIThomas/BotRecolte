@@ -69,6 +69,36 @@ Si Dofus n'est plus au premier plan, il se met en **pause** (reprise avec P).
 Le coin haut gauche de l'écran déclenche aussi l'arrêt natif de pyautogui.
 Le bot n'envoie aucune touche au jeu : il ne fait que des clics gauches.
 
+## Mémoire des cartes (le plus fiable)
+
+Sur une carte donnée, les céréales sont **toujours au même endroit**, et votre
+résolution est fixe. À chaque scan (N), le bot **reconnaît la carte** en
+comparant le décor à une miniature des cartes déjà visitées. Il n'a pas besoin
+de lire les coordonnées, et reconnaît la carte même si les champs sont
+récoltés ou si des personnages passent. Il **survole ensuite directement les
+positions connues** : « Faucher » donne un clic, « Épuisé » est ignoré.
+
+La mémoire se remplit de quatre façons :
+- **Annotation** (`python main.py annoter`) : les céréales d'une carte validée
+  deviennent les positions de cette carte. Le mieux est d'annoter une capture
+  où le champ est entièrement mûr.
+- **Récolte et mode test** : chaque céréale confirmée par l'infobulle
+  (« Faucher » ou « Épuisé ») est ajoutée.
+- **Maj+O** ajoute la position sous le curseur ; **Maj+E** la retire.
+- Une position qui ne donne plus d'infobulle 4 fois d'affilée est oubliée.
+
+Sur une carte connue, l'IA (ou les images) continue de chercher d'éventuelles
+céréales manquantes (`memoire.detection_sur_carte_connue`).
+
+```bash
+python main.py cartes                               # cartes connues et positions
+python main.py cartes --nommer carte_003 "Champs Astrub"
+python main.py cartes --oublier carte_003           # si la carte a changé
+```
+
+Si vous changez la résolution ou le zoom du jeu, videz la mémoire en
+supprimant le dossier `memoire_cartes/`.
+
 ## Détection par IA (méthode recommandée)
 
 Chercher des images ressemblantes (méthode historique) atteint vite ses
@@ -269,6 +299,7 @@ points et dessine `zone_jeu` (vert) et `zones_exclues` (rouge) dans
 | `apprentissage.py` | captures Maj+O / Maj+E, collecte auto, `evaluer` |
 | `ia.py` | IA : dataset de cartes, entraînement YOLO, détecteur |
 | `annoteur.py` | fenêtre d'annotation des cartes (`python main.py annoter`) |
+| `memoire.py` | mémoire des cartes : reconnaissance et positions des céréales |
 | `safety.py` | permissions macOS, app au premier plan, sons, pause/arrêt |
 | `config.yaml` | tous les réglages |
 | `assets/` | images de référence (voir ci-dessous) |
