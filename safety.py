@@ -106,13 +106,24 @@ def application_premier_plan() -> str | None:
         return None
 
 
+_cache_plan: tuple[float, str | None] = (0.0, None)
+
+
 def dofus_au_premier_plan(cfg: dict) -> tuple[bool, str | None]:
+    """Dofus est-il au premier plan ? Résultat gardé en cache un court instant
+    (securite.cache_premier_plan) : osascript coûte 50-100 ms par appel."""
+    global _cache_plan
     if not cfg["securite"].get("verifier_premier_plan", True) or not EST_MAC:
         return True, None
+    maintenant = time.monotonic()
+    if maintenant - _cache_plan[0] < cfg["securite"].get("cache_premier_plan", 0.7):
+        return True, _cache_plan[1]
     nom = application_premier_plan()
     if nom is None:
         return True, None   # impossible à vérifier : on ne bloque pas
     ok = any(a.lower() in nom.lower() for a in cfg["securite"]["applications_autorisees"])
+    # Seul un résultat positif est mis en cache : après une pause, on revérifie vraiment.
+    _cache_plan = (maintenant, nom) if ok else (0.0, None)
     return ok, nom
 
 

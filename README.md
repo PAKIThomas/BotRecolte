@@ -46,12 +46,18 @@ La fenêtre se ferme au lancement. Passez ensuite sur Dofus (plein écran) :
 | **N** | scanne la carte et fauche tout (ou scan de test) |
 | **P** | pause / reprise |
 | **W** | arrêt d'urgence immédiat (le bot attend le prochain N) |
+| **Maj+O** | capture d'une céréale **mûre** sous le curseur (apprentissage) |
+| **Maj+E** | capture d'une céréale **épuisée** (ou d'une fausse détection) sous le curseur |
 | Ctrl+C (terminal) | quitter |
 
-Déroulement d'une carte : scan → pour chaque candidat, survol → lecture de
-l'infobulle → clic **uniquement si « Faucher »** (jamais si « Épuisée ») → les
-clics s'enchaînent, le jeu les met en file → attente de la fin de la file →
-scan de vérification → son de fin de carte.
+Déroulement d'une carte :
+1. scan de la carte ;
+2. céréales traitées **de proche en proche** : chaque clic vise la plus proche de la précédente ;
+3. si la céréale ressemble très fortement à vos images (score ≥ `score_clic_direct`), **clic direct** ;
+4. sinon, survol, lecture de l'infobulle, puis clic **seulement si « Faucher »** (jamais si « Épuisé ») ;
+5. les clics s'enchaînent et le jeu les met en file ;
+6. attente de la fin de la file, puis scan de vérification (toujours avec lecture de l'infobulle) ;
+7. son de fin de carte.
 
 Le bot s'arrête, joue un son et vous rend la main dans ces cas :
 - une image de `assets/alertes/` est détectée (combat, inventaire plein…) ;
@@ -62,6 +68,61 @@ Le bot s'arrête, joue un son et vous rend la main dans ces cas :
 Si Dofus n'est plus au premier plan, il se met en **pause** (reprise avec P).
 Le coin haut gauche de l'écran déclenche aussi l'arrêt natif de pyautogui.
 Le bot n'envoie aucune touche au jeu : il ne fait que des clics gauches.
+
+## Vitesse
+
+Réglages rapides par défaut, avec des délais toujours variables (côté humain) :
+- **Clic direct** sans lecture d'infobulle quand l'image est très sûre
+  (`infobulle.score_clic_direct`, 1.1 pour le désactiver).
+- **Infobulle guettée** toutes les 40 ms au lieu d'une attente fixe. Le délai
+  réel d'apparition est mesuré et l'attente maximale s'y adapte.
+- **Scan accéléré** :
+  - recherche grossière sur une image réduite, puis vérification fine ;
+  - calcul sur plusieurs cœurs ;
+  - la **taille** à laquelle vos images apparaissent est apprise
+    (`apprentissage/memoire_echelles.json`).
+
+  Même avec beaucoup d'images, le scan reste rapide.
+- Vérification « Dofus au premier plan » mise en cache une fraction de
+  seconde. Installez `pyobjc-framework-Cocoa` pour la rendre plus rapide encore.
+
+Pour ralentir : augmentez les médianes de `delais` et baissez `souris.vitesse`.
+
+## Apprentissage : Maj+O / Maj+E
+
+Quand le bot rate une céréale (ou en clique une mauvaise) :
+1. Bot au repos (après la fin de carte) ou en pause (P).
+2. Placez le curseur **sur la céréale** et appuyez sur **Maj+O** (mûre) ou
+   **Maj+E** (épuisée, ou tout ce qui ne doit pas être cliqué).
+3. **Écartez la souris** dans les 4 secondes : la céréale est recapturée
+   sans surbrillance ni infobulle, telle que le scan la voit. Le terminal
+   indique « sans survol » ; si vous ne bougez pas, l'extrait est marqué
+   « SURVOLÉE », moins bon comme modèle.
+
+Pendant la récolte, la **collecte auto** enregistre aussi les céréales
+confirmées par l'infobulle (« Faucher » ou « Épuisé »).
+
+```
+apprentissage/
+  mures/          Maj+O        → à trier dans assets/cereales/<id>/mure/
+  epuisees/       Maj+E        → à trier dans assets/cereales/<id>/epuisee/
+  auto/mures/     confirmées « Faucher » (nom de fichier = céréale détectée)
+  auto/epuisees/  confirmées « Épuisé »
+  cartes/         cartes entières (évaluation, et IA plus tard)
+  annotations.csv position de chaque exemple sur sa carte
+```
+
+Triez les extraits **à la main** dans les dossiers de `assets/`. Gardez les
+plus nets (un seul plant bien centré) et supprimez les ratés. Laissez les
+fichiers dans `apprentissage/` (ou copiez-les) : `evaluer` s'en sert.
+
+### Mesurer les progrès : `python main.py evaluer`
+
+Rejoue la détection sur toutes les cartes de `apprentissage/cartes/` et
+affiche, pour chaque seuil, la part des céréales mûres trouvées (Maj+O) et
+celle des épuisées prises à tort (Maj+E). Le terminal suggère ensuite le
+meilleur seuil ; `python main.py evaluer --appliquer` l'écrit dans
+`config.yaml`. À relancer après chaque ajout d'images dans `assets/`.
 
 ## Comment la détection fonctionne
 
@@ -149,6 +210,7 @@ points et dessine `zone_jeu` (vert) et `zones_exclues` (rouge) dans
 | `vision.py` | capture mss, détecteur HSV + template (interchangeable), infobulles, surbrillance, alertes, annotation |
 | `mouse.py` | souris humaine : Bézier bruitées, profil de vitesse, dépassement, délais log-normaux |
 | `harvester.py` | boucle de récolte, file d'attente, mode test |
+| `apprentissage.py` | captures Maj+O / Maj+E, collecte auto, `evaluer` |
 | `safety.py` | permissions macOS, app au premier plan, sons, pause/arrêt |
 | `config.yaml` | tous les réglages |
 | `assets/` | images de référence (voir ci-dessous) |

@@ -7,6 +7,7 @@
   python main.py zone
   python main.py analyser capture.png
   python main.py hsv ble extrait1.png extrait2.png
+  python main.py evaluer [--appliquer]
 """
 
 from __future__ import annotations
@@ -215,6 +216,16 @@ def touche_vers_pynput(nom: str):
         )
 
 
+MODIFICATEURS = {"shift": "maj", "maj": "maj"}
+
+
+def raccourci_avec_maj(nom: str):
+    """« shift+o » ou « maj+o » -> ('o', True) ; « o » -> ('o', False)."""
+    morceaux = [m.strip().lower() for m in str(nom).split("+")]
+    avec_maj = any(MODIFICATEURS.get(m) == "maj" for m in morceaux[:-1])
+    return touche_vers_pynput(morceaux[-1]), avec_maj
+
+
 def correspond(touche, attendue) -> bool:
     """
     Compare une touche pynput avec la touche attendue.
@@ -290,6 +301,54 @@ def lancer_bot(cfg: dict, choix: dict):
         raccourcis["arret_urgence"]
     )
 
+    # Captures d'apprentissage (Maj+O / Maj+E par défaut).
+    t_cap_mure = raccourci_avec_maj(
+        raccourcis.get("capture_mure", "shift+o")
+    )
+
+    t_cap_epuisee = raccourci_avec_maj(
+        raccourcis.get("capture_epuisee", "shift+e")
+    )
+
+    maj_enfoncee = {"etat": False}
+    collecteur = recolteur.collecteur
+
+    def est_maj(touche) -> bool:
+        return touche in (
+            keyboard.Key.shift,
+            keyboard.Key.shift_l,
+            keyboard.Key.shift_r,
+        )
+
+    def correspond_capture(touche, raccourci) -> bool:
+        attendue, avec_maj = raccourci
+        return correspond(touche, attendue) and (maj_enfoncee["etat"] or not avec_maj)
+
+    def lancer_capture(type_: str):
+        """Capture sous le curseur, dans un thread (le listener ne doit
+        jamais être bloqué). Refusée si le bot bouge la souris."""
+        if etat.occupe.is_set() and not etat.en_pause:
+            log.warning(
+                "Capture ignorée : le bot déplace la souris. "
+                "Mettez en pause (%s) ou attendez la fin.",
+                raccourcis["pause"].upper(),
+            )
+            return
+
+        threading.Thread(
+            target=collecteur.capture_manuelle,
+            args=(type_, sons),
+            name="Capture",
+            daemon=True,
+        ).start()
+
+    def relache(touche):
+        try:
+            if est_maj(touche):
+                maj_enfoncee["etat"] = False
+        except Exception:
+            pass
+
     # -------------------------------------------------------------------------
     # Thread du bot
     # -------------------------------------------------------------------------
@@ -327,6 +386,22 @@ def lancer_bot(cfg: dict, choix: dict):
         """
 
         try:
+            if est_maj(touche):
+                maj_enfoncee["etat"] = True
+                return
+
+            # -------------------------------------------------------------
+            # Captures d'apprentissage (testées avant les autres touches)
+            # -------------------------------------------------------------
+
+            if correspond_capture(touche, t_cap_mure):
+                lancer_capture("mure")
+                return
+
+            if correspond_capture(touche, t_cap_epuisee):
+                lancer_capture("epuisee")
+                return
+
             # -------------------------------------------------------------
             # Arrêt d'urgence
             # -------------------------------------------------------------
@@ -444,7 +519,8 @@ def lancer_bot(cfg: dict, choix: dict):
 
     try:
         ecouteur = keyboard.Listener(
-            on_press=appui
+            on_press=appui,
+            on_release=relache,
         )
 
         log.info(
@@ -521,6 +597,18 @@ def lancer_bot(cfg: dict, choix: dict):
         raccourcis["scanner"].upper(),
         raccourcis["pause"].upper(),
         raccourcis["arret_urgence"].upper(),
+    )
+
+    log.info(
+        "[%s] capture céréale MÛRE  [%s] capture céréale ÉPUISÉE "
+        "(souris au repos ou bot en pause)",
+        raccourcis.get("capture_mure", "shift+o").upper(),
+        raccourcis.get("capture_epuisee", "shift+e").upper(),
+    )
+
+    log.info(
+        "Apprentissage : %s",
+        collecteur.resume(),
     )
 
     # -------------------------------------------------------------------------
@@ -906,12 +994,31 @@ def main():
         nargs="+",
     )
 
+    pe = sous.add_parser(
+        "evaluer",
+        help=(
+            "mesure la détection sur les captures d'apprentissage "
+            "et suggère le meilleur seuil"
+        ),
+    )
+
+    pe.add_argument(
+        "--cereales",
+        default=argparse.SUPPRESS,
+        help="ex. ble,orge (défaut : toutes celles qui ont des images)",
+    )
+
+    pe.add_argument(
+        "--appliquer",
+        action="store_true",
+        help="écrit le seuil suggéré dans config.yaml",
+    )
+
     # Commande interne : utilisée par le programme lui-même pour afficher
     # la fenêtre de choix dans un processus séparé. Pas destinée à l'usage
     # manuel.
     ps = sous.add_parser(
         "_selecteur",
-        help=argparse.SUPPRESS,
     )
 
     ps.add_argument(
@@ -1035,6 +1142,22 @@ def main():
                 cereales_arg
                 or list(cfg["cereales"]),
             )
+
+        return
+
+    # -------------------------------------------------------------------------
+    # Évaluation
+    # -------------------------------------------------------------------------
+
+    if args.commande == "evaluer":
+        from apprentissage import evaluer
+
+        evaluer(
+            cfg,
+            cereales_arg or list(cfg["cereales"]),
+            appliquer=args.appliquer,
+            chemin_config=args.config,
+        )
 
         return
 

@@ -24,6 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 import vision
+from apprentissage import Collecteur
 from mouse import ArretDemande, SourisHumaine
 from safety import Etat, Sons, dofus_au_premier_plan
 
@@ -47,6 +48,9 @@ class Recolteur:
         self.alertes = vision.DetecteurAlertes(cfg)
         self.zones_exclues = cfg["ecran"].get("zones_exclues") or []
         self.dossier_debug = Path(cfg["debug"]["dossier"])
+        self.collecteur = Collecteur(cfg)
+        # Délai d'apparition de l'infobulle, appris au fil des survols.
+        self._delais_infobulle: list[float] = []
         if hasattr(self.detecteur, "resume_images"):
             log.info("Images chargées depuis %s : %s", vision.ASSETS / "cereales",
                      self.detecteur.resume_images(cereales))
@@ -104,6 +108,7 @@ class Recolteur:
         pixels par point) ; les candidats sont ensuite ramenés en coordonnées
         de la capture pleine résolution."""
         frame = capture.grab()
+        self.collecteur.nouveau_scan()
         t0 = time.perf_counter()
         travail = frame.reduire(self.cfg["detection"].get("resolution_travail", 1.0))
         candidats = self.detecteur.detecter(travail, self.cereales)
@@ -181,24 +186,47 @@ class Recolteur:
 
     def lire_infobulle(self, capture: vision.Capture, souris: SourisHumaine,
                        c: vision.Candidat, frame: vision.Frame) -> tuple[str, str, vision.Frame | None]:
-        """Survole le candidat et lit l'infobulle, avec quelques essais."""
+        """Survole le candidat et GUETTE l'infobulle : lecture toutes les
+        ~40 ms dès qu'elle peut apparaître, au lieu d'une attente fixe."""
         cx, cy = frame.vers_points(c.x, c.y)
         w, h = c.w / frame.echelle, c.h / frame.echelle
         cfg_ib = self.cfg["infobulle"]
-        verdict, detail, fb = vision.LecteurInfobulle.INCONNU, "", None
+        L = vision.LecteurInfobulle
+        verdict, detail, fb = L.INCONNU, "", None
         if cfg_ib.get("validation") == "desactivee" or not self.infobulle.operationnel:
             px, py = souris.point_dans_boite(cx, cy, w, h, self.cfg["souris"]["zone_clic"])
             souris.deplacer(px, py)
             return verdict, "infobulle non lue", None
-        for essai in range(1 + cfg_ib["essais"]):
+        for essai in range(1 + cfg_ib.get("essais", 1)):
             px, py = souris.point_dans_boite(cx, cy, w, h, self.cfg["souris"]["zone_clic"])
             souris.deplacer(px, py)
-            souris.dormir(cfg_ib["delai_apparition"] + random.uniform(0, cfg_ib["delai_jitter"]))
-            fb = capture.grab_autour(px, py, cfg_ib["zone"])
-            verdict, detail = self.infobulle.lire(fb)
-            if verdict != vision.LecteurInfobulle.INCONNU:
+            debut = time.monotonic()
+            souris.dormir(cfg_ib.get("delai_min", 0.06) * random.uniform(0.8, 1.3))
+            limite = debut + self.delai_max_infobulle()
+            while True:
+                fb = capture.grab_autour(px, py, cfg_ib["zone"])
+                verdict, detail = self.infobulle.lire(fb)
+                if verdict != L.INCONNU or time.monotonic() >= limite:
+                    break
+                souris.dormir(cfg_ib.get("intervalle_lecture", 0.04))
+            if verdict != L.INCONNU:
+                self._noter_delai(time.monotonic() - debut)
                 break
         return verdict, detail, fb
+
+    def delai_max_infobulle(self) -> float:
+        """Attente max de l'infobulle : config, ou apprise (délai habituel
+        mesuré sur votre Mac + marge) dès qu'on a assez de mesures."""
+        cfg_ib = self.cfg["infobulle"]
+        maxi = cfg_ib.get("delai_max", cfg_ib.get("delai_apparition", 0.6))
+        if cfg_ib.get("apprendre_delai", True) and len(self._delais_infobulle) >= 5:
+            d = sorted(self._delais_infobulle)
+            p90 = d[int(0.9 * (len(d) - 1))]
+            return min(maxi, max(0.15, p90 * 1.5 + 0.05))
+        return maxi
+
+    def _noter_delai(self, d: float):
+        self._delais_infobulle = (self._delais_infobulle + [d])[-40:]
 
     # --------------------------------------------------------------- récolte
 
@@ -211,8 +239,12 @@ class Recolteur:
             self.verifier_premier_plan()
             frame, candidats, _ = self.scanner(capture)
             self.verifier_alertes(capture, frame)
-            a_traiter = vision.trier_ordre_clic([c for c in candidats if c.statut == "candidat"])
+            a_traiter = vision.ordre_plus_proche([c for c in candidats if c.statut == "candidat"],
+                                                 frame.vers_pixels(*souris.position()))
             log.info("── Passe %d : %d candidat(s) à vérifier", passe, len(a_traiter))
+            # Clic direct (sans lire l'infobulle) seulement au 1er passage : aux
+            # passages de vérification, les céréales restantes sont douteuses.
+            seuil_direct = self.cfg["infobulle"].get("score_clic_direct", 0.85) if passe == 1 else 2.0
 
             clics = 0
             introuvables = 0
@@ -221,8 +253,16 @@ class Recolteur:
                 self.verifier_premier_plan()
                 if cfg_s.get("alertes_avant_chaque_clic", True):
                     self.verifier_alertes(capture)
-                verdict, detail, _ = self.lire_infobulle(capture, souris, c, frame)
-                cliquer, raison = self.decider(verdict, c)
+                if c.score >= seuil_direct and c.source != "couleur":
+                    cx, cy = frame.vers_points(c.x, c.y)
+                    souris.deplacer(*souris.point_dans_boite(cx, cy, c.w / frame.echelle, c.h / frame.echelle,
+                                                             self.cfg["souris"]["zone_clic"]))
+                    verdict, detail = "direct", f"score {c.score:.2f}"
+                    cliquer, raison = True, "très ressemblante"
+                else:
+                    verdict, detail, _ = self.lire_infobulle(capture, souris, c, frame)
+                    cliquer, raison = self.decider(verdict, c)
+                    self.collecteur.collecte_auto(frame, c, verdict, detail)
                 if cliquer:
                     self.verifier_premier_plan()         # dernière vérif juste avant le clic
                     souris.attendre("apres_survol")
@@ -267,7 +307,7 @@ class Recolteur:
         cfg_f = self.cfg["file_attente"]
         debut = time.monotonic()
         log.info("… Attente de la file (%d ressource(s), timeout %ds)", nb, cfg_f["timeout"])
-        souris.dormir(2.0)   # le personnage démarre : la surbrillance apparaît
+        souris.dormir(cfg_f.get("attente_demarrage", 1.0))   # le personnage démarre
         confirmations = 0
         stable_depuis = None
         precedente = None
@@ -326,6 +366,7 @@ class Recolteur:
                 self.etat.controle()
                 verdict, detail, fb = self.lire_infobulle(capture, souris, c, frame)
                 cliquerait, raison = self.decider(verdict, c)
+                self.collecteur.collecte_auto(frame, c, verdict, detail)
                 c.statut = "valide" if cliquerait else ("rejete" if verdict == "epuisee" else "illisible")
                 c.raison = f"{verdict} → {'CLIQUERAIT' if cliquerait else 'pas de clic'} : {raison} ({detail})"
                 if fb is not None:

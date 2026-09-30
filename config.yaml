@@ -13,6 +13,10 @@ raccourcis:
   pause: "p"            # pause / reprise
   arret_urgence: "w"    # arrêt immédiat de l'action en cours
   quitter_sur_urgence: false   # true : l'arrêt d'urgence ferme aussi le programme
+  # Captures d'apprentissage sous le curseur (souris au repos ou bot en pause).
+  # Dofus reçoit aussi la touche : Maj évite de déclencher un raccourci du jeu.
+  capture_mure: "shift+o"       # céréale MÛRE sous le curseur
+  capture_epuisee: "shift+e"    # céréale ÉPUISÉE (ou fausse détection) sous le curseur
 
 # --- Écran / capture ---------------------------------------------------------
 ecran:
@@ -38,6 +42,9 @@ securite:
   max_passes_par_carte: 4
   # Vérifier les alertes (combat, inventaire plein...) avant chaque clic.
   alertes_avant_chaque_clic: true
+  # Durée (s) pendant laquelle « Dofus au premier plan » est considéré acquis
+  # (osascript coûte 50-100 ms ; installez pyobjc-framework-Cocoa pour plus rapide).
+  cache_premier_plan: 0.7
   # Seuil du template matching pour les images de assets/alertes/.
   seuil_alerte: 0.85
   # Ctrl+coin haut gauche de l'écran = arrêt de pyautogui (sécurité native).
@@ -54,6 +61,17 @@ detection:
   # Résolution de travail de la détection (pixels par point). 1.0 = rapide ;
   # 2.0 = pleine résolution Retina (plus précis, ~4x plus lent).
   resolution_travail: 1.0
+  # Passe grossière sur une image réduite (fraction de la résolution de
+  # travail) puis vérification fine autour des zones trouvées. 0 = désactivée.
+  resolution_grossiere: 0.5
+  marge_grossiere: 0.12          # seuil de la passe grossière = seuil - marge
+  # Apprentissage de la taille : après quelques détections, seules les 2
+  # tailles où vos images sont trouvées sont testées (mémoire dans
+  # apprentissage/memoire_echelles.json). Recherche complète régulière.
+  apprendre_echelles: true
+  hits_pour_apprendre: 5
+  recherche_complete_tous_les: 10
+  threads: 0                     # 0 = automatique (cœurs du processeur)
   # Surface d'un candidat (en points², convertie en pixels selon l'échelle).
   aire_min: 120
   aire_max: 6000
@@ -109,9 +127,17 @@ infobulle:
   # « Épuisé » lu = jamais de clic, quelle que soit la règle.
   validation: si_disponible
   score_min_sans_infobulle: 0.80
-  delai_apparition: 0.35        # secondes d'attente après le survol
-  delai_jitter: 0.12            # variation aléatoire ajoutée au délai
-  essais: 2                     # nouvelles lectures si l'infobulle est illisible
+  # Clic DIRECT, sans survol ni lecture de l'infobulle, si la céréale
+  # ressemble très fortement à vos images (1er passage seulement). 1.1 = jamais.
+  score_clic_direct: 0.85
+  # L'infobulle est guettée : lecture toutes les `intervalle_lecture` s après
+  # `delai_min`, jusqu'à `delai_max`. Avec apprendre_delai, l'attente max est
+  # ramenée au délai réellement mesuré sur votre Mac (+ marge).
+  delai_min: 0.06
+  delai_max: 0.6
+  intervalle_lecture: 0.04
+  apprendre_delai: true
+  essais: 1                     # nouveaux survols si l'infobulle reste illisible
   # Zone de recherche autour du curseur (points, relatif au curseur).
   zone: {dx: -220, dy: -160, width: 440, height: 320}
   seuil_template: 0.75
@@ -125,7 +151,8 @@ file_attente:
   seuil_surbrillance: 0.78      # template matching assets/surbrillance/
   # Plage HSV optionnelle de la surbrillance (null = désactivée).
   hsv_surbrillance: null        # ex. [[[0, 0, 240], [180, 40, 255]]]
-  intervalle_verif: 1.5         # secondes entre deux vérifications
+  attente_demarrage: 1.0        # s avant la 1re vérification (le personnage démarre)
+  intervalle_verif: 1.2         # secondes entre deux vérifications
   verifs_confirmation: 2        # vérifs consécutives sans surbrillance = fini
   timeout: 180                  # secondes max d'attente de la file
   # Repli si aucune image/plage de surbrillance n'est fournie : on attend que
@@ -138,9 +165,9 @@ file_attente:
 # --- Souris humaine ----------------------------------------------------------
 souris:
   vitesse: 1.0                  # multiplicateur global (>1 = plus rapide)
-  duree_min: 0.12               # durée min d'un déplacement (s)
-  duree_max: 0.65               # durée max d'un déplacement (s)
-  duree_par_1000px: 0.30        # durée additionnelle par 1000 points
+  duree_min: 0.09               # durée min d'un déplacement (s)
+  duree_max: 0.45               # durée max d'un déplacement (s)
+  duree_par_1000px: 0.22        # durée additionnelle par 1000 points
   courbure: 0.22                # amplitude des points de contrôle de Bézier
   bruit: 1.2                    # bruit (points) ajouté le long du trajet
   proba_depassement: 0.18       # probabilité de dépasser légèrement la cible
@@ -149,17 +176,38 @@ souris:
   # Point de clic : décalage aléatoire dans la boîte de la ressource,
   # en fraction de sa demi-taille (jamais le centre exact).
   zone_clic: 0.45
-  appui_min: 0.045              # durée d'appui du clic (s)
-  appui_max: 0.12
+  appui_min: 0.04               # durée d'appui du clic (s)
+  appui_max: 0.10
 
 # --- Délais entre actions ----------------------------------------------------
 # Distribution log-normale : médiane + dispersion (sigma), bornée.
 delais:
-  entre_clics: {mediane: 0.28, sigma: 0.45, min: 0.12, max: 1.2}
-  apres_survol: {mediane: 0.08, sigma: 0.5, min: 0.02, max: 0.4}
+  # Valeurs rapides mais toujours variables (côté humain). Pour ralentir,
+  # augmentez les médianes.
+  entre_clics: {mediane: 0.11, sigma: 0.5, min: 0.04, max: 0.6}
+  apres_survol: {mediane: 0.04, sigma: 0.5, min: 0.01, max: 0.2}
   # Petites pauses irrégulières (probabilité par action).
-  proba_micro_pause: 0.07
-  micro_pause: {mediane: 0.9, sigma: 0.5, min: 0.4, max: 2.5}
+  proba_micro_pause: 0.03
+  micro_pause: {mediane: 0.6, sigma: 0.5, min: 0.25, max: 1.8}
+
+# --- Apprentissage (Maj+O / Maj+E et collecte auto) --------------------------
+apprentissage:
+  dossier: "apprentissage"
+  # Taille de l'extrait enregistré autour du curseur (points) : environ un
+  # plant. Vos images d'orge font ~50x60 points.
+  extrait: {largeur: 50, hauteur: 60}
+  # Après Maj+O/E, écartez la souris : la céréale est recapturée sans
+  # surbrillance ni infobulle (telle que le scan la voit).
+  attendre_souris_ecartee: 4.0  # s max
+  distance_ecart: 80            # points
+  delai_apres_ecart: 0.35       # s (le temps que l'infobulle disparaisse)
+  # Collecte auto : céréales confirmées par l'infobulle pendant la récolte.
+  collecte_auto: true
+  max_auto_par_carte: 8
+  max_fichiers_auto: 3000
+  format_carte: jpg             # cartes entières : jpg (léger) ou png
+  qualite_jpg: 92
+  reutiliser_carte_secondes: 30 # même carte = un seul fichier
 
 # --- Sons (macOS afplay) -----------------------------------------------------
 sons:

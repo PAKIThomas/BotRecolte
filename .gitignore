@@ -4,3 +4,4 @@ __pycache__/
 venv/
 debug/
 .DS_Store
+apprentissage/
