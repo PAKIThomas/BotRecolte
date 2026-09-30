@@ -69,6 +69,56 @@ Si Dofus n'est plus au premier plan, il se met en **pause** (reprise avec P).
 Le coin haut gauche de l'écran déclenche aussi l'arrêt natif de pyautogui.
 Le bot n'envoie aucune touche au jeu : il ne fait que des clics gauches.
 
+## Détection par IA (méthode recommandée)
+
+Chercher des images ressemblantes (méthode historique) atteint vite ses
+limites : l'herbe ressemble aux céréales et chaque image est comparée partout.
+Le bot peut désormais utiliser un **détecteur entraîné sur vos cartes**
+(YOLO). Il apprend à la fois ce qu'est une céréale mûre et ce qui n'en est pas
+une : herbe, sol, céréales épuisées.
+
+**Installation (une fois)** : `pip install ultralytics`. PyTorch est installé
+avec, ≈ 1 Go. L'entraînement utilise la puce Apple (M1).
+
+**La boucle :**
+1. **Récoltez normalement** (ou en mode test). Chaque scan enregistre la carte
+   dans `dataset/cartes/`, sans doublons.
+2. **`python main.py annoter`** : une fenêtre montre chaque carte ; cliquez sur
+   **toutes** les céréales mûres (1-9 pour choisir la céréale), puis **Entrée**
+   pour valider. Ce qui n'est pas coché est appris comme « pas une céréale » :
+   n'en oubliez aucune sur une carte validée. Une carte ratée (menu ouvert,
+   chargement…) : **Suppr**. Vos anciennes captures Maj+O sont importées
+   comme propositions.
+3. **`python main.py entrainer`** (à partir de 10 cartes validées ; 30 à 50
+   cartes variées donnent de bons résultats). Durée : 10 à 40 minutes. Le terminal
+   affiche la **précision** (détections justes) et le **rappel** (céréales
+   trouvées), mesurés sur des cartes que le modèle n'a pas vues.
+4. Le bot utilise le modèle automatiquement (`detection.detecteur: auto`).
+5. **Recommencez** : dès qu'un modèle existe, il pré-remplit les nouvelles
+   cartes dans l'outil d'annotation ; il ne reste qu'à corriger. Chaque
+   ré-entraînement repart du modèle précédent.
+
+| Dans l'outil d'annotation | Action |
+|---|---|
+| clic gauche / glisser | ajouter une céréale (taille par défaut / boîte sur mesure) |
+| clic droit | supprimer la boîte |
+| 1-9, 0 | choisir la céréale |
+| C | donner la céréale choisie à la boîte sous le curseur |
+| [ / ] | taille par défaut plus petite / plus grande |
+| Z | annuler |
+| Entrée ou Espace | **valider** et passer à la carte suivante |
+| → / ← | naviguer sans valider |
+| Suppr | carte à la corbeille |
+| Échap | quitter |
+
+Les boîtes en pointillés sont des propositions de l'IA. Celles en magenta
+viennent des captures Maj+O, qui ne disent pas de quelle céréale il s'agit :
+donnez-leur une céréale (C) ou supprimez-les, sinon la carte ne peut pas être
+validée.
+
+Même avec l'IA, la règle de clic (`infobulle.validation`) reste active. Le
+garde-fou `securite.max_candidats` limite le nombre de survols par carte.
+
 ## Vitesse
 
 Réglages rapides par défaut, avec des délais toujours variables (côté humain) :
@@ -211,6 +261,8 @@ points et dessine `zone_jeu` (vert) et `zones_exclues` (rouge) dans
 | `mouse.py` | souris humaine : Bézier bruitées, profil de vitesse, dépassement, délais log-normaux |
 | `harvester.py` | boucle de récolte, file d'attente, mode test |
 | `apprentissage.py` | captures Maj+O / Maj+E, collecte auto, `evaluer` |
+| `ia.py` | IA : dataset de cartes, entraînement YOLO, détecteur |
+| `annoteur.py` | fenêtre d'annotation des cartes (`python main.py annoter`) |
 | `safety.py` | permissions macOS, app au premier plan, sons, pause/arrêt |
 | `config.yaml` | tous les réglages |
 | `assets/` | images de référence (voir ci-dessous) |

@@ -38,6 +38,8 @@ securite:
   verifier_premier_plan: true
   # Nombre maximal de candidats d'affilée sans infobulle lisible avant arrêt.
   max_introuvables_consecutifs: 4
+  # Garde-fou : au-delà, seuls les meilleurs candidats d'une carte sont survolés.
+  max_candidats: 40
   # Nombre maximal de passes de vérification par carte avant arrêt.
   max_passes_par_carte: 4
   # Vérifier les alertes (combat, inventaire plein...) avant chaque clic.
@@ -52,7 +54,9 @@ securite:
 
 # --- Détection ---------------------------------------------------------------
 detection:
-  detecteur: hsv_template        # module interchangeable (voir vision.py)
+  # auto : IA si un modèle entraîné existe (modeles/cereales.pt), sinon vos
+  # images de assets/ ; « ia » : IA obligatoire ; « hsv_template » : images.
+  detecteur: auto
   # MÉTHODE PRINCIPALE : template matching sur vos images de
   # assets/cereales/<id>/mure/. La couleur ne sert qu'en secours.
   # Résolution de la capture de vos images de assets/ (pixels par point) :
@@ -189,6 +193,30 @@ delais:
   # Petites pauses irrégulières (probabilité par action).
   proba_micro_pause: 0.03
   micro_pause: {mediane: 0.6, sigma: 0.5, min: 0.25, max: 1.8}
+
+# --- IA (YOLO) : python main.py annoter / entrainer ---------------------------
+ia:
+  dossier: "dataset"            # cartes + annotations
+  modele: "modeles/cereales.pt"
+  # Chaque scan enregistre la carte dans dataset/cartes/ (sans doublons).
+  enregistrer_cartes: true
+  seuil_nouvelle_carte: 0.10    # part de pixels différents pour une « nouvelle » carte
+  max_cartes: 3000
+  confiance_min: 0.35           # confiance minimale d'une détection (0..1)
+  iou: 0.5
+  taille_image: 1280            # résolution vue par le modèle
+  device: auto                  # auto = puce Apple (mps) si disponible
+  # Taille par défaut d'une boîte à l'annotation (points) ; [ et ] pour l'ajuster.
+  taille_boite: {largeur: 50, hauteur: 60}
+  entrainement:
+    cartes_min: 10
+    epochs: 120
+    patience: 25                # arrêt si plus de progrès pendant N passes
+    batch: 4
+    workers: 2
+    part_validation: 0.15       # cartes gardées pour mesurer le modèle
+    base: "yolo11n.pt"          # modèle de départ (téléchargé au 1er entraînement)
+    repartir_du_modele: true    # ré-entraîner à partir du modèle actuel
 
 # --- Apprentissage (Maj+O / Maj+E et collecte auto) --------------------------
 apprentissage:

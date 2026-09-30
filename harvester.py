@@ -25,6 +25,7 @@ from pathlib import Path
 
 import vision
 from apprentissage import Collecteur
+from ia import DetecteurIA, EnregistreurCartes
 from mouse import ArretDemande, SourisHumaine
 from safety import Etat, Sons, dofus_au_premier_plan
 
@@ -49,9 +50,16 @@ class Recolteur:
         self.zones_exclues = cfg["ecran"].get("zones_exclues") or []
         self.dossier_debug = Path(cfg["debug"]["dossier"])
         self.collecteur = Collecteur(cfg)
+        self.enregistreur = EnregistreurCartes(cfg)
         # Délai d'apparition de l'infobulle, appris au fil des survols.
         self._delais_infobulle: list[float] = []
-        if hasattr(self.detecteur, "resume_images"):
+        if isinstance(self.detecteur, DetecteurIA):
+            log.info("Détection par IA : %s", self.detecteur.resume_images(cereales))
+            inconnues = [c for c in cereales if c not in self.detecteur.cereales_connues()]
+            if inconnues:
+                log.warning("⚠ Céréale(s) inconnue(s) du modèle, IGNORÉE(S) : %s. Annotez des cartes "
+                            "avec ces céréales puis relancez l'entraînement.", ", ".join(inconnues))
+        elif hasattr(self.detecteur, "mures"):
             log.info("Images chargées depuis %s : %s", vision.ASSETS / "cereales",
                      self.detecteur.resume_images(cereales))
             for cid in cereales:
@@ -111,6 +119,10 @@ class Recolteur:
         self.collecteur.nouveau_scan()
         t0 = time.perf_counter()
         travail = frame.reduire(self.cfg["detection"].get("resolution_travail", 1.0))
+        try:
+            self.enregistreur.enregistrer(travail)       # dataset de l'IA (sans doublons)
+        except Exception:
+            log.debug("Carte non enregistrée", exc_info=True)
         candidats = self.detecteur.detecter(travail, self.cereales)
         f = frame.echelle / travail.echelle
         for c in candidats:
@@ -118,6 +130,14 @@ class Recolteur:
         vision.filtrer_zones_exclues(frame, candidats, self.zones_exclues)
         surb = self.surbrillance.positions(frame) if self.surbrillance.operationnel else []
         vision.ignorer_surbrillance(frame, candidats, surb, self.cfg["file_attente"]["rayon_ignorer"])
+        # Garde-fou : jamais des centaines de survols sur une seule carte.
+        maxi = self.cfg["securite"].get("max_candidats", 40)
+        actifs = sorted((c for c in candidats if c.statut == "candidat"), key=lambda c: c.score, reverse=True)
+        if len(actifs) > maxi:
+            for c in actifs[maxi:]:
+                c.statut, c.raison = "ignore", "au-delà de max_candidats"
+            log.warning("⚠ %d candidats : seuls les %d meilleurs sont gardés. Beaucoup trop de candidats = "
+                        "détection à revoir (annotez des cartes pour l'IA).", len(actifs), maxi)
         n = sum(c.statut == "candidat" for c in candidats)
         log.info("Scan : %d candidat(s) en %.0f ms (échelle %.2f, %d en surbrillance, %d rejeté(s) « épuisée »)",
                  n, (time.perf_counter() - t0) * 1000, frame.echelle, len(surb),
@@ -129,7 +149,7 @@ class Recolteur:
     def journal_diagnostic(self, frame: vision.Frame) -> list[dict]:
         """Affiche le meilleur score de chaque image de assets/ : explique
         pourquoi rien n'est détecté (score sous le seuil, image absente...)."""
-        if not hasattr(self.detecteur, "diagnostic"):
+        if not hasattr(self.detecteur, "diagnostic") or isinstance(self.detecteur, DetecteurIA):
             return []
         lignes = self.detecteur.diagnostic(frame, self.cereales)
         seuil = self.cfg["detection"]["seuil_template"]

@@ -8,6 +8,8 @@
   python main.py analyser capture.png
   python main.py hsv ble extrait1.png extrait2.png
   python main.py evaluer [--appliquer]
+  python main.py annoter [--cereales avoine,ble]   (IA : annoter les cartes)
+  python main.py entrainer                         (IA : entraîner le modèle)
 """
 
 from __future__ import annotations
@@ -1014,6 +1016,35 @@ def main():
         help="écrit le seuil suggéré dans config.yaml",
     )
 
+    pan = sous.add_parser(
+        "annoter",
+        help="IA : indiquer les céréales mûres sur les cartes enregistrées",
+    )
+
+    pan.add_argument(
+        "--cereales",
+        default=argparse.SUPPRESS,
+        help="céréales proposées dans la légende (défaut : toutes)",
+    )
+
+    pan.add_argument(
+        "--tout",
+        action="store_true",
+        help="repasser aussi sur les cartes déjà validées",
+    )
+
+    pen = sous.add_parser(
+        "entrainer",
+        help="IA : entraîner le modèle sur les cartes annotées",
+    )
+
+    pen.add_argument(
+        "--epochs",
+        type=int,
+        default=None,
+        help="nombre de passes d'entraînement (défaut : config.yaml)",
+    )
+
     # Commande interne : utilisée par le programme lui-même pour afficher
     # la fenêtre de choix dans un processus séparé. Pas destinée à l'usage
     # manuel.
@@ -1144,6 +1175,30 @@ def main():
             )
 
         return
+
+    # -------------------------------------------------------------------------
+    # IA : annotation et entraînement
+    # -------------------------------------------------------------------------
+
+    if args.commande == "annoter":
+        from annoteur import annoter
+
+        annoter(
+            cfg,
+            cereales_arg or list(cfg["cereales"]),
+            tout_revoir=args.tout,
+        )
+
+        return
+
+    if args.commande == "entrainer":
+        from ia import entrainer
+
+        sys.exit(
+            0
+            if entrainer(cfg, epochs=args.epochs)
+            else 1
+        )
 
     # -------------------------------------------------------------------------
     # Évaluation

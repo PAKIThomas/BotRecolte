@@ -62,10 +62,18 @@ class Collecteur:
         return datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
 
     def _decouper(self, frame: vision.Frame, x: int, y: int) -> np.ndarray:
+        """Extrait autour de (x, y), remis à l'échelle des images de assets/
+        (detection.echelle_images_assets) : sinon, sur un écran capturé en
+        1x, les extraits seraient deux fois trop petits pour le détecteur."""
         w, h = self._taille_extrait_px(frame.echelle)
         H, W = frame.image.shape[:2]
         x0, y0 = max(0, x - w // 2), max(0, y - h // 2)
-        return frame.image[y0: min(H, y0 + h), x0: min(W, x0 + w)].copy()
+        ext = frame.image[y0: min(H, y0 + h), x0: min(W, x0 + w)].copy()
+        cible = float(self.cfg["detection"].get("echelle_images_assets", 2.0))
+        if abs(cible - frame.echelle) > 1e-3 and ext.size:
+            f = cible / frame.echelle
+            ext = cv2.resize(ext, None, fx=f, fy=f, interpolation=cv2.INTER_CUBIC if f > 1 else cv2.INTER_AREA)
+        return ext
 
     def _enregistrer_carte(self, frame: vision.Frame) -> str:
         """Enregistre la carte entière, ou réutilise la précédente si c'est
@@ -216,6 +224,7 @@ def evaluer(cfg: dict, cereales: list[str], appliquer: bool = False, chemin_conf
     seuil_bas = 0.45
     cfg_eval["detection"]["seuil_template"] = seuil_bas
     cfg_eval["detection"]["apprendre_echelles"] = False       # recherche complète, reproductible
+    cfg_eval["detection"]["detecteur"] = "hsv_template"       # évalue la détection par images
     det = vision.creer_detecteur(cfg_eval)
     rayon_pts = cfg["detection"].get("distance_fusion", 25)
 

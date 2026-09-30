@@ -5,3 +5,7 @@ venv/
 debug/
 .DS_Store
 apprentissage/
+dataset/
+modeles/*.pt
+modeles/*.json
+*.pt

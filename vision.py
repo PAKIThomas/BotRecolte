@@ -559,7 +559,19 @@ DETECTEURS = {"hsv_template": DetecteurHsvTemplate}
 
 
 def creer_detecteur(cfg: dict) -> Detecteur:
-    nom = cfg["detection"].get("detecteur", "hsv_template")
+    """detection.detecteur : « auto » (IA si un modèle entraîné existe,
+    sinon vos images), « ia » ou « hsv_template »."""
+    nom = cfg["detection"].get("detecteur", "auto")
+    if nom in ("auto", "ia"):
+        import ia
+        if nom == "ia" or ia.modele_disponible(cfg):
+            try:
+                return ia.DetecteurIA(cfg)
+            except Exception as e:
+                if nom == "ia":
+                    raise
+                log.warning("IA indisponible (%s) : détection par images.", e)
+        nom = "hsv_template"
     if nom not in DETECTEURS:
         raise ValueError(f"Détecteur inconnu : {nom} (disponibles : {list(DETECTEURS)})")
     return DETECTEURS[nom](cfg)
