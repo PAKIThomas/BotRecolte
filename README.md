@@ -111,6 +111,12 @@ avec, ≈ 1 Go. L'entraînement utilise la puce Apple (M1).
 | Suppr | carte à la corbeille |
 | Échap | quitter |
 
+**Révision** : `python main.py annoter --tout` repasse sur les cartes déjà
+validées. Le modèle y encadre en **blanc** (« oubli ? ») les céréales que vous
+avez peut-être oubliées. Un clic dessus confirme que c'est une céréale ; sinon,
+ignorez-les : les cases blanches non confirmées ne sont jamais enregistrées.
+Une céréale oubliée fait baisser à la fois la précision et le rappel.
+
 Les boîtes en pointillés sont des propositions de l'IA. Celles en magenta
 viennent des captures Maj+O, qui ne disent pas de quelle céréale il s'agit :
 donnez-leur une céréale (C) ou supprimez-les, sinon la carte ne peut pas être

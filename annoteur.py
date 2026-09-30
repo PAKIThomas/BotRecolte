@@ -56,6 +56,9 @@ class Annoteur:
                     self.index = i
                     break
         self.courante = 0                   # index de la céréale choisie
+        # Révision (--tout) : sur les cartes déjà validées, le modèle signale
+        # en blanc les céréales peut-être oubliées (« suspects »).
+        self.revue = tout_revoir
         tb = cfg.get("ia", {}).get("taille_boite", {"largeur": 50, "hauteur": 60})
         self.taille_pts = [float(tb["largeur"]), float(tb["hauteur"])]
         self.donnees: dict = {}
@@ -137,6 +140,15 @@ class Annoteur:
             for b in props:
                 b["proposee"] = True
             d["boites"] = [b for b in props if b["cereale"] in self.cereales]
+        elif d.get("annote") and self.revue:
+            existantes = d.get("boites", [])
+            for p in ia.proposer(self.cfg, img, d["echelle"]):
+                deja = any(abs(p["x"] - b["x"]) <= max(b["w"], p["w"]) / 2
+                           and abs(p["y"] - b["y"]) <= max(b["h"], p["h"]) / 2 for b in existantes)
+                if not deja and p["cereale"] in self.cereales:
+                    p["suspect"] = True
+                    existantes.append(p)
+            d["boites"] = existantes
         self.donnees = d
         self.historique = []
         self.modifie = False
@@ -162,12 +174,15 @@ class Annoteur:
         for i, b in enumerate(self.donnees.get("boites", [])):
             x0, y0 = (b["x"] - b["w"] / 2) * self.f, (b["y"] - b["h"] / 2) * self.f
             x1, y1 = (b["x"] + b["w"] / 2) * self.f, (b["y"] + b["h"] / 2) * self.f
-            coul = self._couleur(b["cereale"])
-            c.create_rectangle(x0, y0, x1, y1, outline=coul, width=2, dash=(4, 3) if b.get("proposee") else None,
-                               tags=("boite", f"b{i}"))
+            suspect = b.get("suspect")
+            coul = "#ffffff" if suspect else self._couleur(b["cereale"])
+            tirets = (2, 4) if suspect else ((4, 3) if b.get("proposee") else None)
+            c.create_rectangle(x0, y0, x1, y1, outline=coul, width=2, dash=tirets, tags=("boite", f"b{i}"))
+            texte = ("oubli ? " if suspect else "") + b["cereale"]
+            if (b.get("proposee") or suspect) and "score" in b:
+                texte += f" {b['score']:.2f}"
             c.create_text(x0 + 2, y0 - 1, anchor="sw", fill=coul, font=("Helvetica", 10, "bold"),
-                          text=b["cereale"] + (f" {b['score']:.2f}" if b.get("proposee") and "score" in b else ""),
-                          tags=("boite",))
+                          text=texte, tags=("boite",))
         self._maj_info()
 
     def _maj_info(self):
@@ -177,11 +192,14 @@ class Annoteur:
         n_ann = sum(1 for i in self.ids if (x := self.etiq.lire(i)) and x.get("annote"))
         etat = "✔ VALIDÉE" if d.get("annote") and not self.modifie else ("modifiée" if self.modifie else "à valider")
         props = sum(1 for b in d.get("boites", []) if b.get("proposee"))
+        suspects = sum(1 for b in d.get("boites", []) if b.get("suspect"))
         nom = self.cfg["cereales"].get(self.cereales[self.courante], {}).get("nom", "?")
         self.info.config(text=(
             f"Carte {self.index + 1}/{len(self.ids)}  ({self.ids[self.index]})  —  {etat}  —  "
             f"{len(d.get('boites', []))} céréale(s) dont {props} proposée(s) par l'IA (pointillés)  —  "
-            f"cartes validées : {n_ann}\n"
+            f"cartes validées : {n_ann}"
+            + (f"  —  {suspects} OUBLI(S) POSSIBLE(S) en blanc : clic dessus = c'est une céréale "
+               f"(sinon ignorez-les, ils ne sont pas enregistrés)" if suspects else "") + "\n"
             f"Céréale choisie : {nom}  |  clic = ajouter · glisser = boîte · clic droit = supprimer · "
             f"C = changer la céréale · Z = annuler · Entrée = VALIDER · →/← = naviguer · "
             f"Suppr = corbeille · Échap = quitter"))
@@ -239,6 +257,14 @@ class Annoteur:
             boite = {"cereale": cid, "x": int((ax + bx) / 2), "y": int((ay + by) / 2),
                      "w": int(bx - ax), "h": int(by - ay)}
         else:
+            i = self._boite_sous(e.x, e.y)
+            if i is not None and self.donnees["boites"][i].get("suspect"):
+                # Oubli confirmé : le suspect devient une vraie céréale.
+                b = self.donnees["boites"][i]
+                for k in ("suspect", "score"):
+                    b.pop(k, None)
+                self._dessiner()
+                return
             ix, iy = self._vers_image(e.x, e.y)
             ech = self.donnees.get("echelle", 1.0)
             boite = {"cereale": cid, "x": int(ix), "y": int(iy),
@@ -286,6 +312,8 @@ class Annoteur:
         if not self.ids:
             return
         d = self.donnees
+        # Les suspects non confirmés ne sont jamais enregistrés.
+        d = dict(d, boites=[b for b in d.get("boites", []) if not b.get("suspect")])
         if valider:
             for b in d.get("boites", []):
                 b.pop("proposee", None)
@@ -297,7 +325,10 @@ class Annoteur:
         self.modifie = False
 
     def valider(self):
-        sans = [b for b in self.donnees.get("boites", []) if b["cereale"] not in self.cereales]
+        if self.revue:
+            self.donnees["boites"] = [b for b in self.donnees.get("boites", []) if not b.get("suspect")]
+        sans = [b for b in self.donnees.get("boites", [])
+                if b["cereale"] not in self.cereales and not b.get("suspect")]
         if sans:
             # Une boîte sans céréale serait ignorée à l'entraînement : l'IA
             # apprendrait que cet endroit n'est PAS une céréale.
