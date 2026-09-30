@@ -12,7 +12,7 @@ ASSETS = Path(__file__).parent / "assets"
 
 
 def choisir(cfg: dict, defaut_test: bool = False) -> dict | None:
-    """Retourne {"cereales": [...], "mode": "recolte"|"test", "survol": bool}
+    """Retourne {"cereales": [...], "mode": "photo"|"zones"|"test"|"recolte", "survol": bool}
     ou None si l'utilisateur annule."""
     try:
         import tkinter  # noqa: F401
@@ -69,16 +69,19 @@ def _fenetre(cfg: dict, defaut_test: bool) -> dict | None:
     ttk.Label(cadre, text="Mode", font=("Helvetica", 13, "bold")).grid(
         row=fin_grille + 2, column=0, sticky="w")
     mode = tk.StringVar(value="test" if defaut_test else "recolte")
-    ttk.Radiobutton(cadre, text="Test / détection (aucun clic, captures annotées)",
-                    variable=mode, value="test").grid(row=fin_grille + 3, column=0, columnspan=3, sticky="w")
-    ttk.Radiobutton(cadre, text="Récolte", variable=mode, value="recolte").grid(
-        row=fin_grille + 4, column=0, columnspan=3, sticky="w")
+    modes = [("1. Photos : N photographie chaque carte de votre circuit", "photo"),
+             ("2. Zones : dessiner les zones de clic sur les photos", "zones"),
+             ("Test : vérifier les zones sur la carte affichée (aucun clic)", "test"),
+             ("3. Récolte : N clique dans les zones de la carte affichée", "recolte")]
+    for k, (texte, valeur) in enumerate(modes):
+        ttk.Radiobutton(cadre, text=texte, variable=mode, value=valeur).grid(
+            row=fin_grille + 3 + k, column=0, columnspan=3, sticky="w")
     survol = tk.BooleanVar(value=cfg["debug"].get("survol_en_test", True))
-    ttk.Checkbutton(cadre, text="En test : survoler les candidats pour lire l'infobulle",
-                    variable=survol).grid(row=fin_grille + 5, column=0, columnspan=3, sticky="w", padx=(20, 0))
+    ttk.Checkbutton(cadre, text="En test : survoler les zones pour lire l'infobulle",
+                    variable=survol).grid(row=fin_grille + 7, column=0, columnspan=3, sticky="w", padx=(20, 0))
 
     message = ttk.Label(cadre, text="", foreground="#b00")
-    message.grid(row=fin_grille + 6, column=0, columnspan=3, sticky="w")
+    message.grid(row=fin_grille + 8, column=0, columnspan=3, sticky="w")
 
     def lancer():
         choix = [cid for cid, v in variables.items() if v.get()]
@@ -89,7 +92,7 @@ def _fenetre(cfg: dict, defaut_test: bool) -> dict | None:
         racine.destroy()
 
     actions = ttk.Frame(cadre)
-    actions.grid(row=fin_grille + 7, column=0, columnspan=3, sticky="e", pady=(10, 0))
+    actions.grid(row=fin_grille + 9, column=0, columnspan=3, sticky="e", pady=(10, 0))
     ttk.Button(actions, text="Annuler", command=racine.destroy).pack(side="left")
     ttk.Button(actions, text="Lancer", command=lancer).pack(side="left", padx=(6, 0))
     racine.bind("<Return>", lambda _e: lancer())
@@ -139,6 +142,7 @@ def _terminal(cfg: dict, defaut_test: bool) -> dict | None:
         except (ValueError, IndexError):
             print("Saisie invalide.")
             return None
-    m = input(f"Mode : [t]est / [r]écolte (défaut {'test' if defaut_test else 'récolte'}) : ").strip().lower()
-    mode = "test" if (m.startswith("t") or (not m and defaut_test)) else "recolte"
+    m = input(f"Mode : [p]hotos / [z]ones / [t]est / [r]écolte (défaut {'test' if defaut_test else 'récolte'}) : "
+              ).strip().lower()
+    mode = {"p": "photo", "z": "zones", "t": "test", "r": "recolte"}.get(m[:1], "test" if defaut_test else "recolte")
     return {"cereales": choix, "mode": mode, "survol": cfg["debug"].get("survol_en_test", True)}

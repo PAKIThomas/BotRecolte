@@ -18,6 +18,34 @@ raccourcis:
   capture_mure: "shift+o"       # céréale MÛRE sous le curseur
   capture_epuisee: "shift+e"    # céréale ÉPUISÉE (ou fausse détection) sous le curseur
 
+# --- Méthode de récolte ------------------------------------------------------
+# zones     : (par défaut) vous photographiez vos cartes (mode Photos, N), vous
+#             dessinez les zones de clic (python main.py zones), le bot
+#             reconnaît la carte et clique exactement dans vos zones.
+# detection : le bot cherche lui-même les céréales (IA ou images de assets/).
+recolte:
+  methode: zones
+
+# --- Circuit (méthode zones) ---------------------------------------------------
+circuit:
+  dossier: "circuit"            # photos des cartes + zones (circuit/cartes.json)
+  # Lire l'infobulle avant chaque clic : clic seulement si « Faucher », jamais
+  # sur « Épuisé ». false = clic direct dans chaque zone, sans vérification.
+  verifier_infobulle: true
+  cliquer_si_illisible: false   # true : cliquer aussi quand aucune infobulle n'est lue
+  # Passages : après la file, un 2e passage reclique les zones encore « Faucher ».
+  passes: 2
+  # Zone créée par un simple clic dans l'éditeur (points) ; [ et ] pour ajuster.
+  taille_zone: {largeur: 24, hauteur: 24}
+  zone_clic: 0.7                # part de la zone utilisée pour le point de clic aléatoire
+  # Reconnaissance de la carte (ressemblance avec vos photos, 0..1).
+  seuil_reconnaissance: 0.80
+  marge_ambiguite: 0.04         # refus si deux cartes se ressemblent autant
+  seuil_variante: 0.93          # photo un peu différente = variante ajoutée
+  max_photos: 4
+  tolerance: 14
+  taille_signature: 192
+
 # --- Écran / capture ---------------------------------------------------------
 ecran:
   # Facteur pixels physiques / points. "auto" = mesuré à la capture

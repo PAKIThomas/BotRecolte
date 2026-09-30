@@ -1,4 +1,13 @@
-"""Boucle de récolte et phase de test/détection.
+"""Boucle de récolte.
+
+Méthode « zones » (par défaut, config recolte.methode) :
+  mode Photos  : N enregistre la carte affichée (circuit.py) ;
+  python main.py zones : vous dessinez les zones de clic sur chaque photo ;
+  mode Récolte : N -> carte reconnue -> clic dans chacune de vos zones
+                 (après lecture de l'infobulle « Faucher ») ;
+  mode Test    : zones dessinées sur la capture + lecture des infobulles, sans clic.
+
+Méthode « detection » (IA ou images), décrite ci-dessous.
 
 Récolte d'une carte (touche « scanner ») :
   1. capture + détection des céréales sélectionnées ;
@@ -23,8 +32,11 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import cv2
+
 import vision
 from apprentissage import Collecteur
+from circuit import Circuit
 from ia import DetecteurIA, EnregistreurCartes
 from memoire import MemoireCartes
 from mouse import ArretDemande, SourisHumaine
@@ -38,27 +50,50 @@ class ArretBot(Exception):
 
 
 class Recolteur:
-    def __init__(self, cfg: dict, cereales: list[str], etat: Etat, sons: Sons, mode_test: bool):
+    def __init__(self, cfg: dict, cereales: list[str], etat: Etat, sons: Sons, mode_test: bool,
+                 mode: str | None = None):
+        """mode : « photo », « test » ou « recolte ». La méthode vient de
+        config.yaml > recolte.methode : « zones » (vos zones dessinées sur les
+        photos des cartes, par défaut) ou « detection » (IA / images)."""
         self.cfg = cfg
         self.cereales = cereales
         self.etat = etat
         self.sons = sons
-        self.mode_test = mode_test
-        self.detecteur = vision.creer_detecteur(cfg)
+        self.mode = mode or ("test" if mode_test else "recolte")
+        self.mode_test = self.mode in ("test", "photo")
+        self.methode = cfg.get("recolte", {}).get("methode", "zones")
         self.infobulle = vision.LecteurInfobulle(cfg)
         self.surbrillance = vision.DetecteurSurbrillance(cfg)
         self.alertes = vision.DetecteurAlertes(cfg)
         self.zones_exclues = cfg["ecran"].get("zones_exclues") or []
         self.dossier_debug = Path(cfg["debug"]["dossier"])
         self.collecteur = Collecteur(cfg)
-        self.enregistreur = EnregistreurCartes(cfg)
-        self.memoire = MemoireCartes(cfg)
         self.carte_id: str | None = None
         self.dernier_point: tuple[float, float] = (0.0, 0.0)
-        if self.memoire.actif:
-            log.info("Mémoire des cartes : %s", self.memoire.resume())
         # Délai d'apparition de l'infobulle, appris au fil des survols.
         self._delais_infobulle: list[float] = []
+        self.detecteur = None
+        if self.methode == "zones" or self.mode == "photo":
+            self.circuit = Circuit(cfg)
+            self.memoire = MemoireCartes(dict(cfg, memoire={"actif": False}))
+            log.info("Circuit : %s", self.circuit.resume())
+        else:
+            self._init_detection(cfg, cereales)
+        if self.methode != "zones" and not self.mode_test and not self.infobulle.operationnel:
+            log.warning("Infobulles illisibles (pas d'image « Faucher » ni d'OCR) : "
+                        "aucun clic ne sera fait. Lancez d'abord le mode test.")
+        if not self.surbrillance.operationnel:
+            log.info("Pas d'image de surbrillance : fin de file détectée par stabilité de l'image.")
+        if not self.alertes.templates:
+            log.info("Aucune image dans assets/alertes/ : combat/inventaire plein non détectés visuellement.")
+
+    def _init_detection(self, cfg: dict, cereales: list[str]):
+        """Méthode « detection » : IA ou images de assets/, mémoire des cartes."""
+        self.detecteur = vision.creer_detecteur(cfg)
+        self.enregistreur = EnregistreurCartes(cfg)
+        self.memoire = MemoireCartes(cfg)
+        if self.memoire.actif:
+            log.info("Mémoire des cartes : %s", self.memoire.resume())
         if isinstance(self.detecteur, DetecteurIA):
             log.info("Détection par IA : %s", self.detecteur.resume_images(cereales))
             inconnues = [c for c in cereales if c not in self.detecteur.cereales_connues()]
@@ -81,22 +116,20 @@ class Recolteur:
                     if orphelines:
                         log.warning("   Images trouvées directement dans assets/cereales/%s/ : %s → "
                                     "déplacez-les dans mure/ ou epuisee/.", cid, ", ".join(orphelines[:5]))
-        if not mode_test and not self.infobulle.operationnel:
-            log.warning("Infobulles illisibles (pas d'image « Faucher » ni d'OCR) : "
-                        "aucun clic ne sera fait. Lancez d'abord le mode test.")
-        if not self.surbrillance.operationnel:
-            log.info("Pas d'image de surbrillance : fin de file détectée par stabilité de l'image.")
-        if not self.alertes.templates:
-            log.info("Aucune image dans assets/alertes/ : combat/inventaire plein non détectés visuellement.")
 
     # ------------------------------------------------------------------ entrée
 
     def executer(self):
         """Appelé dans un thread à chaque appui sur la touche « scanner »."""
         capture = vision.Capture(self.cfg)   # une instance mss par thread
-        souris = SourisHumaine(self.cfg, controle=self.etat.controle, simulation=self.mode_test)
+        souris = None if self.mode == "photo" else SourisHumaine(
+            self.cfg, controle=self.etat.controle, simulation=self.mode_test)
         try:
-            if self.mode_test:
+            if self.mode == "photo":
+                self.photographier(capture)
+            elif self.methode == "zones":
+                self.recolter_zones(capture, souris, test=self.mode_test)
+            elif self.mode_test:
                 self.scan_test(capture, souris)
             else:
                 self.recolter_carte(capture, souris)
@@ -300,6 +333,203 @@ class Recolteur:
 
     def _noter_delai(self, d: float):
         self._delais_infobulle = (self._delais_infobulle + [d])[-40:]
+
+    # ------------------------------------------------ méthode « zones »
+
+    def photographier(self, capture: vision.Capture):
+        """Mode Photos : enregistre la carte affichée dans le circuit."""
+        frame = capture.grab()
+        avant = {i: len(c.get("photos", [])) for i, c in self.circuit.cartes.items()}
+        ident, nouvelle, score = self.circuit.photographier(frame)
+        nom = self.circuit.nom(ident)
+        if nouvelle:
+            log.info("📸 Nouvelle carte photographiée : %s (%d carte(s) au total). "
+                     "Dessinez ses zones avec : python main.py zones", nom, len(self.circuit.cartes))
+        elif len(self.circuit.cartes[ident]["photos"]) > avant.get(ident, 0):
+            log.info("📸 Carte déjà connue : %s (ressemblance %.0f %%). Photo ajoutée comme variante "
+                     "(ex. champs récoltés), les zones restent les mêmes.", nom, 100 * score)
+        else:
+            log.info("📸 Carte déjà photographiée : %s (ressemblance %.0f %%), rien à ajouter.", nom, 100 * score)
+        self.sons.jouer("info")
+
+    def zone_au_curseur(self, type_: str):
+        """Maj+O : ajoute une zone sous le curseur sur la carte affichée ;
+        Maj+E : retire la zone sous le curseur."""
+        import pyautogui
+        capture = vision.Capture(self.cfg)
+        try:
+            px, py = pyautogui.position()
+            ident, _, pourquoi = self.circuit.reconnaitre(capture.grab())
+            if not ident:
+                log.warning("Carte non reconnue (%s) : photographiez-la d'abord (mode Photos).", pourquoi)
+                self.sons.jouer("erreur")
+                return
+            if type_ == "mure":
+                cereale = self.cereales[0] if len(self.cereales) == 1 else ""
+                self.circuit.ajouter_zone(ident, px, py, cereale)
+                log.info("➕ Zone ajoutée sur %s en (%.0f, %.0f) — %d zone(s).", self.circuit.nom(ident), px, py,
+                         len(self.circuit.zones(ident)))
+            elif self.circuit.retirer_zone(ident, px, py):
+                log.info("➖ Zone retirée sur %s en (%.0f, %.0f).", self.circuit.nom(ident), px, py)
+            else:
+                log.info("Aucune zone sous le curseur en (%.0f, %.0f).", px, py)
+            self.sons.jouer("info")
+        except Exception:
+            log.exception("Modification de zone impossible.")
+        finally:
+            capture.fermer()
+
+    def verdict_zone(self, capture: vision.Capture, souris: SourisHumaine, z: dict) -> tuple[str, str]:
+        """Survole un point aléatoire de la zone et guette l'infobulle."""
+        cfg_ib = self.cfg["infobulle"]
+        frac = self.cfg.get("circuit", {}).get("zone_clic", 0.7)
+        L = vision.LecteurInfobulle
+        verdict, detail = L.INCONNU, ""
+        for essai in range(1 + cfg_ib.get("essais", 1)):
+            px, py = souris.point_dans_boite(z["x"], z["y"], z["w"], z["h"], frac)
+            souris.deplacer(px, py)
+            self.dernier_point = (px, py)
+            debut = time.monotonic()
+            souris.dormir(cfg_ib.get("delai_min", 0.06) * random.uniform(0.8, 1.3))
+            limite = debut + self.delai_max_infobulle()
+            while True:
+                verdict, detail = self.infobulle.lire(capture.grab_autour(px, py, cfg_ib["zone"]))
+                if verdict != L.INCONNU or time.monotonic() >= limite:
+                    break
+                souris.dormir(cfg_ib.get("intervalle_lecture", 0.04))
+            if verdict != L.INCONNU:
+                self._noter_delai(time.monotonic() - debut)
+                break
+        return verdict, detail
+
+    @staticmethod
+    def ordre_zones(zones: list[tuple[int, dict]], depart: tuple[float, float]) -> list[tuple[int, dict]]:
+        """Plus proche voisin : chaque clic vise la zone la plus proche."""
+        restantes, ordre = list(zones), []
+        x, y = depart
+        while restantes:
+            i, z = min(restantes, key=lambda t: (t[1]["x"] - x) ** 2 + (t[1]["y"] - y) ** 2)
+            restantes.remove((i, z))
+            ordre.append((i, z))
+            x, y = z["x"], z["y"]
+        return ordre
+
+    def recolter_zones(self, capture: vision.Capture, souris: SourisHumaine, test: bool = False):
+        """Reconnaît la carte puis clique dans les zones que vous avez dessinées.
+
+        Avec circuit.verifier_infobulle (par défaut) : clic seulement si
+        « Faucher » s'affiche, jamais sur « Épuisé ». Après la file, un
+        passage de vérification reclique les zones encore « Faucher »."""
+        cfg_c = self.cfg.get("circuit", {})
+        cfg_s = self.cfg["securite"]
+        L = vision.LecteurInfobulle
+        debut = time.monotonic()
+        self.verifier_premier_plan()
+        frame = capture.grab()
+        self.verifier_alertes(capture, frame)
+        ident, score, pourquoi = self.circuit.reconnaitre(frame)
+        if not ident:
+            if test:
+                vision.enregistrer(self.dossier_debug / datetime.now().strftime("%Y%m%d_%H%M%S") / "capture.png",
+                                   frame.image)
+            raise ArretBot(f"carte non reconnue ({pourquoi}). Photographiez-la (mode Photos) "
+                           "puis dessinez ses zones (python main.py zones)")
+        self.carte_id = ident
+        indexees = [(i, z) for i, z in enumerate(self.circuit.zones(ident))
+                    if not z.get("cereale") or z["cereale"] in self.cereales]
+        log.info("🗺  Carte reconnue : %s (ressemblance %.0f %%) — %d zone(s) à traiter.",
+                 self.circuit.nom(ident), 100 * score, len(indexees))
+        if not indexees:
+            raise ArretBot(f"aucune zone (pour les céréales choisies) sur {self.circuit.nom(ident)} : "
+                           "dessinez-les avec python main.py zones")
+        verifier = cfg_c.get("verifier_infobulle", True) and self.infobulle.operationnel
+        if cfg_c.get("verifier_infobulle", True) and not self.infobulle.operationnel:
+            log.warning("Pas d'image « Faucher » ni d'OCR : clics sans vérification de l'infobulle.")
+
+        if test:
+            self._test_zones(capture, souris, frame, ident, indexees, verifier)
+            return
+
+        epuisees: set[int] = set()
+        total = 0
+        passes = max(1, int(cfg_c.get("passes", 2))) if verifier else 1
+        for passe in range(1, passes + 1):
+            a_faire = self.ordre_zones([(i, z) for i, z in indexees if i not in epuisees], souris.position())
+            if not a_faire:
+                break
+            log.info("── Passe %d : %d zone(s)", passe, len(a_faire))
+            clics = illisibles = 0
+            for k, (i, z) in enumerate(a_faire, 1):
+                self.etat.controle()
+                self.verifier_premier_plan()
+                if cfg_s.get("alertes_avant_chaque_clic", True):
+                    self.verifier_alertes(capture)
+                etiquette = f"[{k}/{len(a_faire)}] zone {i + 1}" + (f" ({z['cereale']})" if z.get("cereale") else "")
+                if verifier:
+                    verdict, detail = self.verdict_zone(capture, souris, z)
+                    if verdict == L.EPUISEE:
+                        epuisees.add(i)
+                        illisibles = 0
+                        log.info("  %s → Épuisé ✘", etiquette)
+                        continue
+                    if verdict == L.INCONNU and not cfg_c.get("cliquer_si_illisible", False):
+                        illisibles += 1
+                        log.info("  %s → pas d'infobulle, pas de clic (%s)", etiquette, detail)
+                        if illisibles >= cfg_s["max_introuvables_consecutifs"]:
+                            raise ArretBot(f"aucune infobulle sur {illisibles} zones d'affilée : la carte "
+                                           "correspond-elle bien à la photo ? (zones décalées, zoom changé ?)")
+                        continue
+                    illisibles = 0
+                else:
+                    px, py = souris.point_dans_boite(z["x"], z["y"], z["w"], z["h"], cfg_c.get("zone_clic", 0.7))
+                    souris.deplacer(px, py)
+                    detail = "sans vérification"
+                self.verifier_premier_plan()        # dernière vérification juste avant le clic
+                souris.attendre("apres_survol")
+                souris.clic_gauche()
+                clics += 1
+                log.info("  %s → ✔ clic (%s)", etiquette, detail)
+                souris.attendre("entre_clics")
+            total += clics
+            if clics == 0:
+                break
+            self.eloigner_souris(souris)
+            self.attendre_fin_file(capture, souris, clics)
+        log.info("✔ Carte terminée : %d clic(s) en %.0f s. Changez de carte puis appuyez sur la touche scanner.",
+                 total, time.monotonic() - debut)
+        self.sons.jouer("fin_carte")
+
+    def _test_zones(self, capture, souris, frame, ident, indexees, verifier):
+        """Mode test : dessine les zones sur la capture actuelle (pour vérifier
+        qu'elles tombent bien sur les céréales) et, avec le survol, lit
+        l'infobulle de chaque zone. Aucun clic."""
+        dossier = self.dossier_debug / datetime.now().strftime("%Y%m%d_%H%M%S")
+        img = frame.image.copy()
+        survol = self.cfg["debug"].get("survol_en_test", True) and verifier
+        L = vision.LecteurInfobulle
+        compte = {"faucher": 0, "epuisee": 0, "inconnu": 0}
+        for i, z in (self.ordre_zones(indexees, souris.position()) if survol else indexees):
+            coul = (0, 200, 255)
+            if survol:
+                self.etat.controle()
+                verdict, detail = self.verdict_zone(capture, souris, z)
+                compte[verdict] = compte.get(verdict, 0) + 1
+                coul = {L.FAUCHER: (0, 220, 0), L.EPUISEE: (0, 0, 255)}.get(verdict, (255, 120, 0))
+                log.info("  zone %d → %s", i + 1, {L.FAUCHER: "Faucher (CLIQUERAIT)", L.EPUISEE: "Épuisé"}.get(
+                    verdict, f"pas d'infobulle ({detail})"))
+            x0, y0 = frame.vers_pixels(z["x"] - z["w"] / 2, z["y"] - z["h"] / 2)
+            x1, y1 = frame.vers_pixels(z["x"] + z["w"] / 2, z["y"] + z["h"] / 2)
+            cv2.rectangle(img, (x0, y0), (x1, y1), coul, max(1, int(frame.echelle)))
+            cv2.putText(img, str(i + 1), (x0, max(10, y0 - 3)), cv2.FONT_HERSHEY_SIMPLEX, 0.4 * frame.echelle,
+                        coul, max(1, int(frame.echelle / 2)))
+        if survol:
+            self.eloigner_souris(souris)
+        vision.enregistrer(dossier / "zones.png", img)
+        log.info("══ Test %s : %d zone(s)%s → %s/zones.png", self.circuit.nom(ident), len(indexees),
+                 f" — Faucher {compte['faucher']}, Épuisé {compte['epuisee']}, sans infobulle {compte['inconnu']}"
+                 if survol else "", dossier)
+        log.info("   Vert = cliquerait, rouge = épuisé, bleu = pas d'infobulle (zone mal placée ?), orange = non survolée.")
+        self.sons.jouer("fin_carte")
 
     # --------------------------------------------------------------- récolte
 

@@ -1,8 +1,9 @@
 # BotRecolte : récolte de céréales pour Dofus 3 (macOS)
 
 Bot personnel de test : il pilote la vraie souris comme un humain pour faucher
-les céréales mûres de la carte courante. Vous changez de carte vous-même, puis
-vous appuyez sur **N**.
+les céréales de la carte courante, dans les zones que vous avez dessinées sur
+une photo de chaque carte. Vous changez de carte vous-même, puis vous appuyez
+sur **N**.
 
 > ⚠️ L'automatisation est interdite par les conditions d'utilisation de Dofus
 > et peut entraîner un bannissement. Usage personnel et à vos risques.
@@ -31,45 +32,93 @@ lance Python (Terminal, iTerm, VS Code…) dans :
 Quittez puis relancez le terminal. `python main.py permissions` vérifie les
 trois permissions, et elles sont aussi contrôlées à chaque lancement.
 
-## Utilisation
+## Utilisation : trois étapes
+
+Vous passez toujours sur les mêmes cartes : vous indiquez **une fois** où
+cliquer sur chacune, et le bot clique ensuite **exactement** à ces endroits.
 
 ```bash
-python main.py            # petite fenêtre : choix des céréales + mode (Test ou Récolte)
-python main.py --test     # même fenêtre, mode Test présélectionné
-python main.py --cereales ble,orge --mode recolte    # sans fenêtre
+python main.py      # fenêtre : céréales + mode (Photos, Zones, Test, Récolte)
 ```
 
-La fenêtre se ferme au lancement. Passez ensuite sur Dofus (plein écran) :
+**1. Photos.** Mode « Photos ». Sur chaque carte de votre circuit, appuyez
+sur **N** : la carte est photographiée (`circuit/photos/`). Une carte déjà
+photographiée est reconnue et n'est pas dupliquée.
+
+**2. Zones.** Mode « Zones » (ou `python main.py zones --cereales ble,orge`).
+Chaque photo s'affiche : dessinez les zones où cliquer. Une zone = un clic,
+à un point aléatoire à l'intérieur. L'enregistrement est automatique.
+
+| Dans l'éditeur | Action |
+|---|---|
+| clic gauche | zone à cet endroit (taille par défaut) |
+| glisser | zone rectangulaire sur mesure |
+| clic droit | supprimer la zone |
+| 1-9 | céréale des nouvelles zones |
+| C | donner la céréale choisie à la zone sous le curseur |
+| [ / ] | taille par défaut plus petite / plus grande |
+| Z | annuler |
+| Tab | autre photo de la même carte |
+| R | renommer la carte |
+| → / Entrée, ← | carte suivante / précédente |
+| Suppr | supprimer la carte |
+| Échap | quitter |
+
+**Test (conseillé).** Mode « Test » : N reconnaît la carte, dessine vos zones
+sur la capture actuelle (`debug/<date>/zones.png`) et, avec le survol, lit
+l'infobulle de chaque zone, **sans cliquer** :
+- vert : cliquerait ;
+- rouge : épuisé ;
+- bleu : pas d'infobulle, la zone est sans doute mal placée.
+
+**3. Récolte.** Mode « Récolte ». Sur chaque carte, appuyez sur **N** :
+1. le bot reconnaît la carte en la comparant à vos photos ;
+2. il survole chaque zone, de proche en proche ;
+3. il clique si l'infobulle affiche « Faucher », jamais si elle affiche « Épuisé » ;
+4. il attend la fin de la file, puis fait un 2ᵉ passage pour les zones encore
+   « Faucher » ;
+5. il joue le son de fin de carte.
+
+Carte inconnue (ou trop différente de ses photos) : le bot s'arrête et vous
+le dit. `circuit.verifier_infobulle: false` supprime la lecture de
+l'infobulle : clic direct dans chaque zone.
 
 | Touche (config.yaml > raccourcis) | Action |
 |---|---|
-| **N** | scanne la carte et fauche tout (ou scan de test) |
+| **N** | photo / test / récolte de la carte, selon le mode |
 | **P** | pause / reprise |
-| **W** | arrêt d'urgence immédiat (le bot attend le prochain N) |
-| **Maj+O** | capture d'une céréale **mûre** sous le curseur (apprentissage) |
-| **Maj+E** | capture d'une céréale **épuisée** (ou d'une fausse détection) sous le curseur |
+| **W** | arrêt d'urgence immédiat |
+| **Maj+O** | ajoute une zone sous le curseur, sur la carte affichée |
+| **Maj+E** | retire la zone sous le curseur |
 | Ctrl+C (terminal) | quitter |
 
-Déroulement d'une carte :
-1. scan de la carte ;
-2. céréales traitées **de proche en proche** : chaque clic vise la plus proche de la précédente ;
-3. si la céréale ressemble très fortement à vos images (score ≥ `score_clic_direct`), **clic direct** ;
-4. sinon, survol, lecture de l'infobulle, puis clic **seulement si « Faucher »** (jamais si « Épuisé ») ;
-5. les clics s'enchaînent et le jeu les met en file ;
-6. attente de la fin de la file, puis scan de vérification (toujours avec lecture de l'infobulle) ;
-7. son de fin de carte.
+```bash
+python main.py cartes                                # cartes et nombre de zones
+python main.py cartes --nommer carte_003 "Champ Astrub"
+python main.py cartes --oublier carte_003            # supprime photo + zones
+python main.py zones --carte carte_003               # rouvre une carte précise
+```
+
+Si vous changez la résolution ou le zoom du jeu, les zones ne tombent plus
+au bon endroit : refaites les photos et les zones.
 
 Le bot s'arrête, joue un son et vous rend la main dans ces cas :
-- une image de `assets/alertes/` est détectée (combat, inventaire plein…) ;
-- N ressources d'affilée ont une infobulle illisible ;
-- il reste des céréales après trop de passes ;
+- carte non reconnue ;
+- plusieurs zones d'affilée sans infobulle ;
+- une image de `assets/alertes/` est détectée (combat…) ;
 - une erreur survient.
 
 Si Dofus n'est plus au premier plan, il se met en **pause** (reprise avec P).
-Le coin haut gauche de l'écran déclenche aussi l'arrêt natif de pyautogui.
 Le bot n'envoie aucune touche au jeu : il ne fait que des clics gauches.
 
-## Mémoire des cartes (le plus fiable)
+---
+
+# Méthode alternative : détection automatique
+
+Avec `recolte.methode: detection`, le bot cherche lui-même les céréales. Les
+sections suivantes décrivent ce mode.
+
+## Mémoire des cartes (méthode détection)
 
 Sur une carte donnée, les céréales sont **toujours au même endroit**, et votre
 résolution est fixe. À chaque scan (N), le bot **reconnaît la carte** en
@@ -99,7 +148,7 @@ python main.py cartes --oublier carte_003           # si la carte a changé
 Si vous changez la résolution ou le zoom du jeu, videz la mémoire en
 supprimant le dossier `memoire_cartes/`.
 
-## Détection par IA (méthode recommandée)
+## Détection par IA
 
 Chercher des images ressemblantes (méthode historique) atteint vite ses
 limites : l'herbe ressemble aux céréales et chaque image est comparée partout.
@@ -295,7 +344,9 @@ points et dessine `zone_jeu` (vert) et `zones_exclues` (rouge) dans
 | `selector.py` | fenêtre de choix des céréales et du mode (lancée dans un processus séparé : tkinter et pynput plantent ensemble sur macOS) |
 | `vision.py` | capture mss, détecteur HSV + template (interchangeable), infobulles, surbrillance, alertes, annotation |
 | `mouse.py` | souris humaine : Bézier bruitées, profil de vitesse, dépassement, délais log-normaux |
-| `harvester.py` | boucle de récolte, file d'attente, mode test |
+| `circuit.py` | cartes photographiées, reconnaissance de la carte, zones de clic |
+| `editeur_zones.py` | éditeur des zones (`python main.py zones`) |
+| `harvester.py` | boucle de récolte (zones ou détection), file d'attente, mode test |
 | `apprentissage.py` | captures Maj+O / Maj+E, collecte auto, `evaluer` |
 | `ia.py` | IA : dataset de cartes, entraînement YOLO, détecteur |
 | `annoteur.py` | fenêtre d'annotation des cartes (`python main.py annoter`) |

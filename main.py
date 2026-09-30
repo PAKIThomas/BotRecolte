@@ -10,7 +10,8 @@
   python main.py evaluer [--appliquer]
   python main.py annoter [--cereales avoine,ble]   (IA : annoter les cartes)
   python main.py entrainer                         (IA : entraîner le modèle)
-  python main.py cartes [--nommer ID NOM] [--oublier ID]   (mémoire des cartes)
+  python main.py zones [--cereales ble,orge]       (dessiner les zones de clic)
+  python main.py cartes [--nommer ID NOM] [--oublier ID]   (cartes du circuit)
 """
 
 from __future__ import annotations
@@ -282,13 +283,18 @@ def lancer_bot(cfg: dict, choix: dict):
     etat = Etat()
     sons = Sons(cfg)
 
+    mode = "test" if mode_test and choix["mode"] != "photo" else choix["mode"]
+
     recolteur = Recolteur(
         cfg,
         choix["cereales"],
         etat,
         sons,
         mode_test,
+        mode=mode,
     )
+
+    methode_zones = recolteur.methode == "zones"
 
     raccourcis = cfg["raccourcis"]
 
@@ -340,9 +346,11 @@ def lancer_bot(cfg: dict, choix: dict):
             )
             return
 
+        # Méthode « zones » : Maj+O ajoute une zone sous le curseur sur la
+        # carte affichée, Maj+E retire la zone sous le curseur.
         threading.Thread(
-            target=collecteur.capture_manuelle,
-            args=(type_, sons),
+            target=recolteur.zone_au_curseur if methode_zones else collecteur.capture_manuelle,
+            args=(type_,) if methode_zones else (type_, sons),
             name="Capture",
             daemon=True,
         ).start()
@@ -493,11 +501,10 @@ def lancer_bot(cfg: dict, choix: dict):
 
                 log.info(
                     "▶ %s…",
-                    (
-                        "Scan de TEST (aucun clic)"
-                        if mode_test
-                        else "Récolte de la carte"
-                    ),
+                    {
+                        "photo": "Photo de la carte",
+                        "test": "TEST de la carte (aucun clic)",
+                    }.get(mode, "Récolte de la carte"),
                 )
 
                 threading.Thread(
@@ -589,9 +596,16 @@ def lancer_bot(cfg: dict, choix: dict):
 
     log.info(
         "══ BotRecolte prêt : mode %s, céréales : %s",
-        "TEST" if mode_test else "RÉCOLTE",
+        {"photo": "PHOTOS", "test": "TEST"}.get(mode, "RÉCOLTE"),
         noms,
     )
+
+    if mode == "photo":
+        log.info(
+            "Sur chaque carte de votre circuit, appuyez sur [%s] pour la photographier. "
+            "Ensuite : python main.py zones",
+            raccourcis["scanner"].upper(),
+        )
 
     log.info(
         "Passez sur Dofus."
@@ -604,17 +618,26 @@ def lancer_bot(cfg: dict, choix: dict):
         raccourcis["arret_urgence"].upper(),
     )
 
-    log.info(
-        "[%s] capture céréale MÛRE  [%s] capture céréale ÉPUISÉE "
-        "(souris au repos ou bot en pause)",
-        raccourcis.get("capture_mure", "shift+o").upper(),
-        raccourcis.get("capture_epuisee", "shift+e").upper(),
-    )
+    if methode_zones:
+        log.info(
+            "[%s] ajouter une zone sous le curseur  [%s] retirer la zone sous le curseur "
+            "(bot au repos ou en pause)",
+            raccourcis.get("capture_mure", "shift+o").upper(),
+            raccourcis.get("capture_epuisee", "shift+e").upper(),
+        )
 
-    log.info(
-        "Apprentissage : %s",
-        collecteur.resume(),
-    )
+    else:
+        log.info(
+            "[%s] capture céréale MÛRE  [%s] capture céréale ÉPUISÉE "
+            "(souris au repos ou bot en pause)",
+            raccourcis.get("capture_mure", "shift+o").upper(),
+            raccourcis.get("capture_epuisee", "shift+e").upper(),
+        )
+
+        log.info(
+            "Apprentissage : %s",
+            collecteur.resume(),
+        )
 
     # -------------------------------------------------------------------------
     # Boucle principale
@@ -1036,6 +1059,23 @@ def main():
         help="repasser aussi sur les cartes déjà validées",
     )
 
+    pz2 = sous.add_parser(
+        "zones",
+        help="dessiner les zones de clic sur les photos des cartes",
+    )
+
+    pz2.add_argument(
+        "--cereales",
+        default=argparse.SUPPRESS,
+        help="céréales de la légende (ex. ble,orge,avoine)",
+    )
+
+    pz2.add_argument(
+        "--carte",
+        default=None,
+        help="ouvrir directement une carte (ex. carte_003)",
+    )
+
     pca = sous.add_parser(
         "cartes",
         help="mémoire des cartes : lister, nommer, oublier",
@@ -1212,22 +1252,41 @@ def main():
 
         return
 
-    if args.commande == "cartes":
-        from memoire import MemoireCartes
+    if args.commande == "zones":
+        from editeur_zones import editer
 
-        memoire = MemoireCartes(cfg)
+        editer(
+            cfg,
+            cereales_arg or list(cfg["cereales"]),
+            carte=args.carte,
+        )
+
+        return
+
+    if args.commande == "cartes":
+        if cfg.get("recolte", {}).get("methode", "zones") == "zones":
+            from circuit import Circuit
+
+            base = Circuit(cfg)
+            oublier, titre = base.supprimer, "Circuit"
+
+        else:
+            from memoire import MemoireCartes
+
+            base = MemoireCartes(cfg)
+            oublier, titre = base.oublier, "Mémoire des cartes"
 
         if args.oublier:
-            ok = memoire.oublier(args.oublier)
-            log.info("%s %s", "Carte oubliée :" if ok else "Carte inconnue :", args.oublier)
+            ok = oublier(args.oublier)
+            log.info("%s %s", "Carte supprimée :" if ok else "Carte inconnue :", args.oublier)
 
         elif args.nommer:
-            ok = memoire.renommer(*args.nommer)
+            ok = base.renommer(*args.nommer)
             log.info("%s %s", "Carte renommée :" if ok else "Carte inconnue :", args.nommer[0])
 
-        log.info("Mémoire des cartes : %s", memoire.resume())
+        log.info("%s : %s", titre, base.resume())
 
-        for ligne in memoire.lister():
+        for ligne in base.lister():
             print("  " + ligne)
 
         return
@@ -1325,6 +1384,14 @@ def main():
         log.info(
             "Annulé."
         )
+        return
+
+    if choix["mode"] == "zones":
+        # L'éditeur n'utilise pas les raccourcis clavier : il tourne ici,
+        # sans listener pynput.
+        from editeur_zones import editer
+
+        editer(cfg, choix["cereales"])
         return
 
     lancer_bot(
