@@ -46,6 +46,14 @@ securite:
 # --- Détection ---------------------------------------------------------------
 detection:
   detecteur: hsv_template        # module interchangeable (voir vision.py)
+  # MÉTHODE PRINCIPALE : template matching sur vos images de
+  # assets/cereales/<id>/mure/. La couleur ne sert qu'en secours.
+  # Résolution de la capture de vos images de assets/ (pixels par point) :
+  # 2.0 = capture Retina (Cmd+Maj+4 ou captures du mode test), 1.0 sinon.
+  echelle_images_assets: 2.0
+  # Résolution de travail de la détection (pixels par point). 1.0 = rapide ;
+  # 2.0 = pleine résolution Retina (plus précis, ~4x plus lent).
+  resolution_travail: 1.0
   # Surface d'un candidat (en points², convertie en pixels selon l'échelle).
   aire_min: 120
   aire_max: 6000
@@ -54,16 +62,23 @@ detection:
   ratio_max: 4.0
   # Noyau morphologique (pixels physiques) pour nettoyer le masque.
   noyau_morpho: 5
-  # Seuil de template matching (TM_CCOEFF_NORMED) pour les images mûres.
-  seuil_template: 0.72
-  # Échelles testées pour le template matching (1.0 = taille de l'image source).
-  echelles_template: [0.8, 0.9, 1.0, 1.1, 1.2]
+  # Seuil de template matching (TM_CCOEFF_NORMED, 0..1) pour les images mûres.
+  # Trop de faux positifs -> montez (0.75) ; rien de trouvé -> baissez (0.6).
+  # Le diagnostic (mode test / analyser) affiche le meilleur score de chaque image.
+  seuil_template: 0.68
+  # Tailles relatives testées (zoom du jeu légèrement différent de vos captures).
+  echelles_template: [0.8, 0.9, 1.0, 1.1, 1.25]
   # Si une image "épuisée" correspond mieux que "mûre" + marge -> rejet.
   marge_epuisee: 0.05
   # Distance (points) sous laquelle deux candidats sont fusionnés.
   distance_fusion: 25
-  # Garder les candidats trouvés uniquement par la couleur (sans template).
-  garder_couleur_seule: true
+  # Garder aussi les candidats trouvés uniquement par la couleur alors que la
+  # céréale a des images : déconseillé (l'herbe a souvent la même teinte).
+  garder_couleur_seule: false
+  bonus_couleur: true            # petit bonus de score si la couleur confirme
+  # Céréale sélectionnée SANS image dans mure/ : false = ignorée ;
+  # true = détection par couleur seule (beaucoup de faux candidats).
+  couleur_si_pas_d_image: false
 
 # --- Céréales ----------------------------------------------------------------
 # Plages HSV OpenCV (H: 0-180, S: 0-255, V: 0-255). Plusieurs plages possibles.
@@ -71,7 +86,7 @@ detection:
 # Blé et orge sont estimés à partir des icônes fournies ; à confirmer en jeu.
 cereales:
   ble:        {nom: "Blé",        calibre: false, hsv: [[[16, 110, 140], [28, 255, 255]]]}
-  orge:       {nom: "Orge",       calibre: false, hsv: [[[30, 90, 110], [40, 255, 255]]]}
+  orge:       {nom: "Orge",       calibre: false, hsv: [[[22, 100, 120], [35, 200, 240]]]}   # d'après la capture en jeu
   avoine:     {nom: "Avoine",     calibre: false, hsv: [[[18, 60, 130], [30, 190, 255]]]}
   houblon:    {nom: "Houblon",    calibre: false, hsv: [[[38, 80, 90], [60, 255, 255]]]}
   lin:        {nom: "Lin",        calibre: false, hsv: [[[95, 60, 110], [125, 255, 255]]]}
@@ -86,12 +101,21 @@ cereales:
 
 # --- Infobulle (validation au survol) ----------------------------------------
 infobulle:
+  # Règle de clic :
+  #   exigee        : clic seulement si « Faucher » est lu dans l'infobulle ;
+  #   si_disponible : « Faucher » lu, OU infobulle illisible mais image très
+  #                   ressemblante (score >= score_min_sans_infobulle) ;
+  #   desactivee    : clic sur tout candidat trouvé par image, sans lecture.
+  # « Épuisé » lu = jamais de clic, quelle que soit la règle.
+  validation: si_disponible
+  score_min_sans_infobulle: 0.80
   delai_apparition: 0.35        # secondes d'attente après le survol
   delai_jitter: 0.12            # variation aléatoire ajoutée au délai
   essais: 2                     # nouvelles lectures si l'infobulle est illisible
   # Zone de recherche autour du curseur (points, relatif au curseur).
   zone: {dx: -220, dy: -160, width: 440, height: 320}
-  seuil_template: 0.80
+  seuil_template: 0.75
+  echelles: [0.8, 0.9, 1.0, 1.1, 1.25]
   ocr_secours: true             # utilise pytesseract s'il est installé
   mots_faucher: ["faucher"]
   mots_epuisee: ["épuisée", "epuisee", "épuisé", "epuise"]

@@ -47,6 +47,22 @@ class Recolteur:
         self.alertes = vision.DetecteurAlertes(cfg)
         self.zones_exclues = cfg["ecran"].get("zones_exclues") or []
         self.dossier_debug = Path(cfg["debug"]["dossier"])
+        if hasattr(self.detecteur, "resume_images"):
+            log.info("Images chargées depuis %s : %s", vision.ASSETS / "cereales",
+                     self.detecteur.resume_images(cereales))
+            for cid in cereales:
+                if not self.detecteur.mures.get(cid):
+                    if self.cfg["detection"].get("couleur_si_pas_d_image", False):
+                        log.warning("⚠ %s : aucune image dans assets/cereales/%s/mure/ → détection par couleur "
+                                    "seulement (peu fiable).", cid, cid)
+                    else:
+                        log.warning("⚠ %s : aucune image dans assets/cereales/%s/mure/ → céréale IGNORÉE. "
+                                    "Ajoutez des captures de la céréale mûre.", cid, cid)
+                    orphelines = [f.name for f in (vision.ASSETS / "cereales" / cid).glob("*")
+                                  if f.suffix.lower() in vision.EXTENSIONS_IMAGES]
+                    if orphelines:
+                        log.warning("   Images trouvées directement dans assets/cereales/%s/ : %s → "
+                                    "déplacez-les dans mure/ ou epuisee/.", cid, ", ".join(orphelines[:5]))
         if not mode_test and not self.infobulle.operationnel:
             log.warning("Infobulles illisibles (pas d'image « Faucher » ni d'OCR) : "
                         "aucun clic ne sera fait. Lancez d'abord le mode test.")
@@ -80,18 +96,69 @@ class Recolteur:
 
     # --------------------------------------------------------------- analyse
 
-    def scanner(self, capture: vision.Capture) -> tuple[vision.Frame, list[vision.Candidat], list]:
-        """Capture + détection + filtres (interface, surbrillance)."""
+    def scanner(self, capture: vision.Capture, diagnostic_si_vide: bool = True
+                ) -> tuple[vision.Frame, list[vision.Candidat], list]:
+        """Capture + détection + filtres (interface, surbrillance).
+
+        La détection tourne sur une copie réduite (detection.resolution_travail
+        pixels par point) ; les candidats sont ensuite ramenés en coordonnées
+        de la capture pleine résolution."""
         frame = capture.grab()
         t0 = time.perf_counter()
-        candidats = self.detecteur.detecter(frame, self.cereales)
+        travail = frame.reduire(self.cfg["detection"].get("resolution_travail", 1.0))
+        candidats = self.detecteur.detecter(travail, self.cereales)
+        f = frame.echelle / travail.echelle
+        for c in candidats:
+            c.x, c.y, c.w, c.h = int(c.x * f), int(c.y * f), int(c.w * f), int(c.h * f)
         vision.filtrer_zones_exclues(frame, candidats, self.zones_exclues)
         surb = self.surbrillance.positions(frame) if self.surbrillance.operationnel else []
         vision.ignorer_surbrillance(frame, candidats, surb, self.cfg["file_attente"]["rayon_ignorer"])
-        log.info("Scan : %d candidat(s) en %.0f ms (échelle %.2f, %d en surbrillance)",
-                 sum(c.statut == "candidat" for c in candidats),
-                 (time.perf_counter() - t0) * 1000, frame.echelle, len(surb))
+        n = sum(c.statut == "candidat" for c in candidats)
+        log.info("Scan : %d candidat(s) en %.0f ms (échelle %.2f, %d en surbrillance, %d rejeté(s) « épuisée »)",
+                 n, (time.perf_counter() - t0) * 1000, frame.echelle, len(surb),
+                 sum(c.statut == "rejete" for c in candidats))
+        if n == 0 and diagnostic_si_vide:
+            self.journal_diagnostic(travail)
         return frame, candidats, surb
+
+    def journal_diagnostic(self, frame: vision.Frame) -> list[dict]:
+        """Affiche le meilleur score de chaque image de assets/ : explique
+        pourquoi rien n'est détecté (score sous le seuil, image absente...)."""
+        if not hasattr(self.detecteur, "diagnostic"):
+            return []
+        lignes = self.detecteur.diagnostic(frame, self.cereales)
+        seuil = self.cfg["detection"]["seuil_template"]
+        if not lignes:
+            log.warning("Aucune image dans assets/cereales/<céréale>/mure/ pour %s : "
+                        "seule la couleur est utilisée (peu fiable).", ", ".join(self.cereales))
+        for l in lignes:
+            log.info("  diag %-8s %-7s %-28s meilleur score %.2f (seuil %.2f) à (%d, %d) pts, taille x%.2f",
+                     l["cereale"], l["etat"], l["image"][:28], l["score"], seuil,
+                     l["x_points"], l["y_points"], l["echelle"])
+        return lignes
+
+    def decider(self, verdict: str, c: vision.Candidat) -> tuple[bool, str]:
+        """Clic ou pas, selon l'infobulle et infobulle.validation :
+        - exigee : clic seulement si « Faucher » est lu ;
+        - si_disponible : « Faucher » lu, OU infobulle illisible mais image
+          très ressemblante (score >= score_min_sans_infobulle) ;
+        - desactivee : clic sur tout candidat trouvé par image.
+        « Épuisé » lu = jamais de clic, quelle que soit la règle."""
+        L = vision.LecteurInfobulle
+        cfg_ib = self.cfg["infobulle"]
+        politique = cfg_ib.get("validation", "si_disponible")
+        if verdict == L.EPUISEE:
+            return False, "Épuisé"
+        if verdict == L.FAUCHER:
+            return True, "Faucher"
+        if politique == "exigee":
+            return False, "infobulle illisible"
+        par_image = c.source != "couleur"
+        if politique == "desactivee" and par_image:
+            return True, "validation désactivée"
+        if par_image and c.score >= cfg_ib.get("score_min_sans_infobulle", 0.8):
+            return True, f"infobulle illisible mais image sûre ({c.score:.2f})"
+        return False, "infobulle illisible"
 
     def verifier_alertes(self, capture: vision.Capture, frame: vision.Frame | None = None):
         if not self.alertes.templates:
@@ -119,6 +186,10 @@ class Recolteur:
         w, h = c.w / frame.echelle, c.h / frame.echelle
         cfg_ib = self.cfg["infobulle"]
         verdict, detail, fb = vision.LecteurInfobulle.INCONNU, "", None
+        if cfg_ib.get("validation") == "desactivee" or not self.infobulle.operationnel:
+            px, py = souris.point_dans_boite(cx, cy, w, h, self.cfg["souris"]["zone_clic"])
+            souris.deplacer(px, py)
+            return verdict, "infobulle non lue", None
         for essai in range(1 + cfg_ib["essais"]):
             px, py = souris.point_dans_boite(cx, cy, w, h, self.cfg["souris"]["zone_clic"])
             souris.deplacer(px, py)
@@ -151,20 +222,22 @@ class Recolteur:
                 if cfg_s.get("alertes_avant_chaque_clic", True):
                     self.verifier_alertes(capture)
                 verdict, detail, _ = self.lire_infobulle(capture, souris, c, frame)
-                if verdict == vision.LecteurInfobulle.FAUCHER:
+                cliquer, raison = self.decider(verdict, c)
+                if cliquer:
                     self.verifier_premier_plan()         # dernière vérif juste avant le clic
                     souris.attendre("apres_survol")
                     souris.clic_gauche()
                     clics += 1
                     introuvables = 0
-                    log.info("  [%d/%d] %s → Faucher ✔ (clic, %s)", i, len(a_traiter), c.cereale, detail)
+                    log.info("  [%d/%d] %s → %s ✔ clic (%s)", i, len(a_traiter), c.cereale, raison, detail)
                     souris.attendre("entre_clics")
                 elif verdict == vision.LecteurInfobulle.EPUISEE:
                     introuvables = 0
-                    log.info("  [%d/%d] %s → Épuisée ✘ (ignorée)", i, len(a_traiter), c.cereale)
+                    log.info("  [%d/%d] %s → Épuisé ✘ (ignorée)", i, len(a_traiter), c.cereale)
                 else:
                     introuvables += 1
-                    log.info("  [%d/%d] %s → infobulle illisible (%s)", i, len(a_traiter), c.cereale, detail)
+                    log.info("  [%d/%d] %s (score %.2f) → pas de clic : %s (%s)",
+                             i, len(a_traiter), c.cereale, c.score, raison, detail)
                     if introuvables >= cfg_s["max_introuvables_consecutifs"]:
                         raise ArretBot(f"{introuvables} ressources introuvables d'affilée "
                                        "(carte changée ? détection à recalibrer ?)")
@@ -233,9 +306,15 @@ class Recolteur:
         templates à partir des vraies images du jeu."""
         horo = datetime.now().strftime("%Y%m%d_%H%M%S")
         dossier = self.dossier_debug / horo
-        frame, candidats, surb = self.scanner(capture)
+        frame, candidats, surb = self.scanner(capture, diagnostic_si_vide=False)
         vision.enregistrer(dossier / "capture.png", frame.image)
         cfg_d = self.cfg["debug"]
+        diag = self.journal_diagnostic(frame.reduire(self.cfg["detection"].get("resolution_travail", 1.0)))
+        if diag:
+            with open(dossier / "diagnostic_images.csv", "w", newline="", encoding="utf-8") as f:
+                w = csv.DictWriter(f, fieldnames=list(diag[0]))
+                w.writeheader()
+                w.writerows(diag)
 
         lignes = []
         survol = cfg_d.get("survol_en_test", True)
@@ -246,12 +325,14 @@ class Recolteur:
             if survol and c.statut == "candidat":
                 self.etat.controle()
                 verdict, detail, fb = self.lire_infobulle(capture, souris, c, frame)
-                c.statut = {"faucher": "valide", "epuisee": "rejete"}.get(verdict, "illisible")
-                c.raison = f"{verdict} ({detail})"
+                cliquerait, raison = self.decider(verdict, c)
+                c.statut = "valide" if cliquerait else ("rejete" if verdict == "epuisee" else "illisible")
+                c.raison = f"{verdict} → {'CLIQUERAIT' if cliquerait else 'pas de clic'} : {raison} ({detail})"
                 if fb is not None:
                     # Captures d'infobulle : à recadrer pour créer les templates
                     # assets/infobulles/faucher|epuisee/.
                     vision.enregistrer(dossier / "infobulles" / verdict / f"{i:02d}_{c.cereale}.png", fb.image)
+                log.info("  #%02d %-8s score %.2f %-16s → %s", i, c.cereale, c.score, c.source, c.raison)
             if cfg_d.get("enregistrer_extraits", True):
                 vision.enregistrer(dossier / "extraits" / c.statut / f"{i:02d}_{c.cereale}_{c.score:.2f}.png",
                                    vision.extrait(frame, c, cfg_d["taille_extrait"]))
@@ -302,10 +383,17 @@ class Recolteur:
 
 
 def analyser_image(cfg: dict, chemin: str, cereales: list[str]) -> Path:
-    """Test hors ligne : détection sur une capture enregistrée (sans souris)."""
+    """Test hors ligne : détection sur une capture enregistrée (sans souris),
+    avec le diagnostic du meilleur score de chaque image de assets/."""
     frame = vision.frame_depuis_fichier(chemin, cfg)
     det = vision.creer_detecteur(cfg)
-    candidats = det.detecter(frame, cereales)
+    travail = frame.reduire(cfg["detection"].get("resolution_travail", 1.0))
+    t0 = time.perf_counter()
+    candidats = det.detecter(travail, cereales)
+    duree = (time.perf_counter() - t0) * 1000
+    f = frame.echelle / travail.echelle
+    for c in candidats:
+        c.x, c.y, c.w, c.h = int(c.x * f), int(c.y * f), int(c.w * f), int(c.h * f)
     vision.filtrer_zones_exclues(frame, candidats, cfg["ecran"].get("zones_exclues") or [])
     surb = vision.DetecteurSurbrillance(cfg)
     pos = surb.positions(frame) if surb.operationnel else []
@@ -313,11 +401,17 @@ def analyser_image(cfg: dict, chemin: str, cereales: list[str]) -> Path:
     sortie = Path(cfg["debug"]["dossier"]) / f"hors_ligne_{Path(chemin).stem}"
     vision.enregistrer(sortie / "annotee.png",
                        vision.annoter(frame, candidats, cfg["ecran"].get("zones_exclues"), pos, Path(chemin).name))
+    log.info("%s : échelle %.2f, images : %s", Path(chemin).name, frame.echelle,
+             det.resume_images(cereales) if hasattr(det, "resume_images") else "?")
+    if hasattr(det, "diagnostic"):
+        for l in det.diagnostic(travail, cereales):
+            log.info("  diag %-8s %-7s %-28s meilleur score %.2f à (%d, %d) pts, taille x%.2f",
+                     l["cereale"], l["etat"], l["image"][:28], l["score"], l["x_points"], l["y_points"], l["echelle"])
     for i, c in enumerate(candidats):
         vision.enregistrer(sortie / "extraits" / c.statut / f"{i:02d}_{c.cereale}_{c.score:.2f}.png",
                            vision.extrait(frame, c, cfg["debug"]["taille_extrait"]))
         px, py = frame.vers_points(c.x, c.y)
         log.info("  #%02d %-8s (%4.0f, %4.0f) pts  score %.2f  %-16s %s %s",
                  i, c.cereale, px, py, c.score, c.source, c.statut, c.raison)
-    log.info("%d candidat(s) → %s/annotee.png", len(candidats), sortie)
+    log.info("%d candidat(s) en %.0f ms → %s/annotee.png", len(candidats), duree, sortie)
     return sortie

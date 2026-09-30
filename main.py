@@ -1,95 +1,249 @@
 """BotRecolte : point d'entrée.
 
-  python main.py                       interface de sélection puis bot (ou test)
-  python main.py --test                idem, mode test présélectionné
-  python main.py --cereales ble,orge --mode test    sans interface
-  python main.py permissions           vérifie les permissions macOS
-  python main.py zone                  capture l'écran avec une grille (calibrer zone_jeu)
-  python main.py analyser capture.png  détection hors ligne sur une image
-  python main.py hsv ble extrait1.png extrait2.png   suggère une plage HSV
+  python main.py
+  python main.py --test
+  python main.py --cereales ble,orge --mode test
+  python main.py permissions
+  python main.py zone
+  python main.py analyser capture.png
+  python main.py hsv ble extrait1.png extrait2.png
 """
 
 from __future__ import annotations
 
 import argparse
+import faulthandler
+import json
 import logging
+import os
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
 
 import yaml
 
-log = logging.getLogger("main")
-RACINE = Path(__file__).parent
 
+RACINE = Path(__file__).parent
+log = logging.getLogger("main")
+
+# Affiche une trace Python en cas de crash fatal lorsque c'est possible.
+try:
+    faulthandler.enable()
+except Exception:
+    pass
+
+
+# =============================================================================
+# Configuration
+# =============================================================================
 
 def charger_config(chemin: str) -> dict:
     with open(chemin, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+
+    if not isinstance(config, dict):
+        raise ValueError(f"Configuration invalide : {chemin}")
+
+    return config
 
 
 def configurer_logs(verbeux: bool):
-    logging.basicConfig(level=logging.DEBUG if verbeux else logging.INFO,
-                        format="%(asctime)s %(levelname)-7s %(message)s", datefmt="%H:%M:%S")
+    logging.basicConfig(
+        level=logging.DEBUG if verbeux else logging.INFO,
+        format="%(asctime)s %(levelname)-7s %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
     for bruyant in ("PIL", "pynput"):
         logging.getLogger(bruyant).setLevel(logging.WARNING)
 
 
 # =============================================================================
-#  Permissions
+# Permissions macOS
 # =============================================================================
 
 AIDE_PERMISSIONS = """
-Réglages Système → Confidentialité et sécurité, puis ajoutez/cochez l'application
-qui lance Python (Terminal, iTerm, VS Code…) dans :
-  • Accessibilité               → contrôle de la souris (pyautogui)
-  • Enregistrement de l'écran   → captures (mss)
-  • Surveillance de l'entrée    → raccourcis clavier (pynput)
+Réglages Système → Confidentialité et sécurité, puis ajoutez/cochez
+l'application qui lance Python (Terminal, iTerm, VS Code…) dans :
+
+  • Accessibilité
+  • Enregistrement de l'écran
+  • Surveillance de l'entrée
+
 Puis QUITTEZ et relancez complètement le terminal.
 """
 
 
 def controler_permissions(bloquant: bool) -> bool:
     from safety import EST_MAC, demander_permissions, verifier_permissions
+
     if not EST_MAC:
-        log.warning("Système non macOS : vérification des permissions ignorée.")
+        log.warning(
+            "Système non macOS : vérification des permissions ignorée."
+        )
         return True
+
     etat = verifier_permissions()
-    manquantes = [n for n, ok in etat.items() if ok is False]
+
+    manquantes = [
+        nom
+        for nom, ok in etat.items()
+        if ok is False
+    ]
+
     for nom, ok in etat.items():
-        log.info("  %s %s", {True: "✔", False: "✘", None: "?"}[ok], nom)
+        symbole = {
+            True: "✔",
+            False: "✘",
+            None: "?",
+        }[ok]
+
+        log.info(
+            "  %s %s",
+            symbole,
+            nom,
+        )
+
     if manquantes:
         demander_permissions()
-        log.error("Permission(s) manquante(s) : %s", ", ".join(manquantes))
+
+        log.error(
+            "Permission(s) manquante(s) : %s",
+            ", ".join(manquantes),
+        )
+
         print(AIDE_PERMISSIONS)
+
         if bloquant:
             return False
+
     return True
 
 
 # =============================================================================
-#  Raccourcis clavier
+# Fenêtre de sélection (dans un processus séparé)
+# =============================================================================
+
+def choisir_en_sous_processus(
+    chemin_config: str,
+    defaut_test: bool,
+):
+    """
+    Lance la fenêtre de choix (tkinter) dans un PROCESSUS SÉPARÉ.
+
+    Sur macOS, tkinter et le listener clavier pynput ne doivent pas
+    cohabiter dans le même processus : le programme peut planter avec
+    « zsh: trace trap » juste après le démarrage du listener. En isolant
+    tkinter dans un sous-processus, le processus principal n'en charge
+    jamais, et le listener pynput démarre proprement.
+
+    Retourne le dict de choix, ou None si l'utilisateur annule.
+    """
+
+    fd, chemin_sortie = tempfile.mkstemp(
+        prefix="botrecolte_choix_",
+        suffix=".json",
+    )
+    os.close(fd)
+
+    commande = [
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--config",
+        chemin_config,
+        "_selecteur",
+        "--sortie",
+        chemin_sortie,
+    ]
+
+    if defaut_test:
+        commande.append("--defaut-test")
+
+    try:
+        resultat = subprocess.run(commande)
+
+        if resultat.returncode != 0:
+            log.error(
+                "La fenêtre de sélection s'est terminée avec le code %s.",
+                resultat.returncode,
+            )
+            return None
+
+        contenu = Path(chemin_sortie).read_text(
+            encoding="utf-8"
+        ).strip()
+
+        if not contenu:
+            return None
+
+        return json.loads(contenu)
+
+    except Exception:
+        log.exception(
+            "Impossible de lancer la fenêtre de sélection."
+        )
+        return None
+
+    finally:
+        try:
+            os.remove(chemin_sortie)
+        except OSError:
+            pass
+
+
+# =============================================================================
+# Raccourcis clavier
 # =============================================================================
 
 def touche_vers_pynput(nom: str):
-    """« n » -> 'n' ; « f8 » -> Key.f8."""
+    """Convertit par exemple 'n' -> 'n' et 'f8' -> Key.f8."""
     from pynput import keyboard
+
     nom = str(nom).strip().lower()
+
     if len(nom) == 1:
         return nom
+
     try:
         return getattr(keyboard.Key, nom)
     except AttributeError:
-        raise ValueError(f"Touche inconnue dans config.yaml : {nom!r}")
+        raise ValueError(
+            f"Touche inconnue dans config.yaml : {nom!r}"
+        )
 
 
 def correspond(touche, attendue) -> bool:
-    if isinstance(attendue, str):
-        char = getattr(touche, "char", None)
-        return char is not None and char.lower() == attendue
-    return touche == attendue
+    """
+    Compare une touche pynput avec la touche attendue.
 
+    La fonction est volontairement défensive : certaines touches
+    spéciales n'ont pas d'attribut 'char'.
+    """
+
+    try:
+        if isinstance(attendue, str):
+            char = getattr(touche, "char", None)
+
+            if char is None:
+                return False
+
+            return char.lower() == attendue.lower()
+
+        return touche == attendue
+
+    except Exception:
+        log.exception(
+            "Erreur pendant la comparaison d'une touche."
+        )
+        return False
+
+
+# =============================================================================
+# Lancement du bot
+# =============================================================================
 
 def lancer_bot(cfg: dict, choix: dict):
     from pynput import keyboard
@@ -97,183 +251,882 @@ def lancer_bot(cfg: dict, choix: dict):
     from harvester import Recolteur
     from safety import Etat, Sons
 
-    mode_test = choix["mode"] == "test" or cfg["debug"].get("actif", False)
-    cfg["debug"]["survol_en_test"] = choix.get("survol", True)
-    etat, sons = Etat(), Sons(cfg)
-    recolteur = Recolteur(cfg, choix["cereales"], etat, sons, mode_test)
+    # -------------------------------------------------------------------------
+    # Configuration
+    # -------------------------------------------------------------------------
 
-    r = cfg["raccourcis"]
-    t_scan, t_pause, t_stop = (touche_vers_pynput(r[k]) for k in ("scanner", "pause", "arret_urgence"))
+    mode_test = (
+        choix["mode"] == "test"
+        or cfg["debug"].get("actif", False)
+    )
+
+    cfg["debug"]["survol_en_test"] = choix.get(
+        "survol",
+        True,
+    )
+
+    etat = Etat()
+    sons = Sons(cfg)
+
+    recolteur = Recolteur(
+        cfg,
+        choix["cereales"],
+        etat,
+        sons,
+        mode_test,
+    )
+
+    raccourcis = cfg["raccourcis"]
+
+    t_scan = touche_vers_pynput(
+        raccourcis["scanner"]
+    )
+
+    t_pause = touche_vers_pynput(
+        raccourcis["pause"]
+    )
+
+    t_stop = touche_vers_pynput(
+        raccourcis["arret_urgence"]
+    )
+
+    # -------------------------------------------------------------------------
+    # Thread du bot
+    # -------------------------------------------------------------------------
 
     def tache():
         try:
             recolteur.executer()
+
+        except Exception:
+            log.exception(
+                "Erreur pendant l'exécution du bot."
+            )
+
         finally:
             etat.occupe.clear()
-            log.info("En attente… [%s] scanner  [%s] pause  [%s] arrêt  (Ctrl+C pour quitter)",
-                     r["scanner"].upper(), r["pause"].upper(), r["arret_urgence"].upper())
+
+            log.info(
+                "En attente… [%s] scanner  [%s] pause  [%s] arrêt",
+                raccourcis["scanner"].upper(),
+                raccourcis["pause"].upper(),
+                raccourcis["arret_urgence"].upper(),
+            )
+
+    # -------------------------------------------------------------------------
+    # Callback clavier
+    # -------------------------------------------------------------------------
 
     def appui(touche):
-        if correspond(touche, t_stop):
-            etat.arret.set()
-            if etat.en_pause:
-                etat.basculer_pause()      # débloque le thread pour qu'il s'arrête
-            log.warning("⏹ ARRÊT D'URGENCE demandé")
-            sons.jouer("arret")
-            if r.get("quitter_sur_urgence"):
-                etat.quitter.set()
-        elif correspond(touche, t_pause):
-            pause = etat.basculer_pause()
-            log.info("⏸ PAUSE" if pause else "▶ REPRISE")
-            sons.jouer("pause")
-        elif correspond(touche, t_scan):
-            if etat.occupe.is_set():
-                log.info("Déjà en cours (arrêt : %s).", r["arret_urgence"].upper())
-                return
-            etat.arret.clear()
-            if etat.en_pause:
-                etat.basculer_pause()
-            etat.occupe.set()
-            log.info("▶ %s…", "Scan de TEST (aucun clic)" if mode_test else "Récolte de la carte")
-            threading.Thread(target=tache, daemon=True).start()
+        """
+        Callback pynput.
 
-    ecouteur = keyboard.Listener(on_press=appui)
-    ecouteur.start()
-    if getattr(ecouteur, "IS_TRUSTED", True) is False:
-        log.error("pynput n'a pas la permission « Surveillance de l'entrée » : raccourcis inactifs.")
-    noms = ", ".join(cfg["cereales"][c]["nom"] for c in choix["cereales"])
-    log.info("══ BotRecolte prêt : mode %s, céréales : %s", "TEST" if mode_test else "RÉCOLTE", noms)
-    log.info("Passez sur Dofus. [%s] scanner  [%s] pause  [%s] arrêt d'urgence  (Ctrl+C pour quitter)",
-             r["scanner"].upper(), r["pause"].upper(), r["arret_urgence"].upper())
+        IMPORTANT :
+        aucune opération non protégée ne doit pouvoir faire tomber
+        le listener clavier.
+        """
+
+        try:
+            # -------------------------------------------------------------
+            # Arrêt d'urgence
+            # -------------------------------------------------------------
+
+            if correspond(touche, t_stop):
+                etat.arret.set()
+
+                if etat.en_pause:
+                    try:
+                        etat.basculer_pause()
+                    except Exception:
+                        log.exception(
+                            "Erreur lors de la sortie de pause."
+                        )
+
+                log.warning(
+                    "⏹ ARRÊT D'URGENCE demandé"
+                )
+
+                try:
+                    sons.jouer("arret")
+                except Exception:
+                    log.exception(
+                        "Impossible de jouer le son d'arrêt."
+                    )
+
+                if raccourcis.get("quitter_sur_urgence"):
+                    etat.quitter.set()
+
+                return
+
+            # -------------------------------------------------------------
+            # Pause / reprise
+            # -------------------------------------------------------------
+
+            if correspond(touche, t_pause):
+                try:
+                    pause = etat.basculer_pause()
+
+                    log.info(
+                        "⏸ PAUSE"
+                        if pause
+                        else "▶ REPRISE"
+                    )
+
+                except Exception:
+                    log.exception(
+                        "Erreur pendant la pause/reprise."
+                    )
+
+                try:
+                    sons.jouer("pause")
+                except Exception:
+                    log.exception(
+                        "Impossible de jouer le son de pause."
+                    )
+
+                return
+
+            # -------------------------------------------------------------
+            # Scan
+            # -------------------------------------------------------------
+
+            if correspond(touche, t_scan):
+
+                if etat.occupe.is_set():
+                    log.info(
+                        "Déjà en cours (arrêt : %s).",
+                        raccourcis["arret_urgence"].upper(),
+                    )
+                    return
+
+                etat.arret.clear()
+
+                if etat.en_pause:
+                    try:
+                        etat.basculer_pause()
+                    except Exception:
+                        log.exception(
+                            "Erreur lors de la sortie de pause."
+                        )
+
+                etat.occupe.set()
+
+                log.info(
+                    "▶ %s…",
+                    (
+                        "Scan de TEST (aucun clic)"
+                        if mode_test
+                        else "Récolte de la carte"
+                    ),
+                )
+
+                threading.Thread(
+                    target=tache,
+                    name="BotRecolte",
+                    daemon=True,
+                ).start()
+
+                return
+
+        except Exception:
+            # Une exception du callback ne doit jamais arrêter le listener.
+            log.exception(
+                "Erreur dans le traitement d'une touche."
+            )
+
+    # -------------------------------------------------------------------------
+    # Listener clavier
+    # -------------------------------------------------------------------------
+
+    log.info(
+        "Création du listener clavier..."
+    )
+
+    try:
+        ecouteur = keyboard.Listener(
+            on_press=appui
+        )
+
+        log.info(
+            "Listener clavier créé."
+        )
+
+    except Exception:
+        log.exception(
+            "Impossible de créer le listener clavier."
+        )
+        raise
+
+    try:
+        ecouteur.start()
+
+        log.info(
+            "Listener clavier démarré."
+        )
+
+    except Exception:
+        log.exception(
+            "Impossible de démarrer le listener clavier."
+        )
+        raise
+
+    # -------------------------------------------------------------------------
+    # État de la permission vu par pynput
+    # -------------------------------------------------------------------------
+
+    try:
+        trusted = getattr(
+            ecouteur,
+            "IS_TRUSTED",
+            None,
+        )
+
+        if trusted is False:
+            log.warning(
+                "pynput indique que la permission "
+                "« Surveillance de l'entrée » n'est pas accordée."
+            )
+
+            log.warning(
+                "La vérification macOS du programme indique pourtant "
+                "que la permission est accordée."
+            )
+
+    except Exception:
+        log.exception(
+            "Impossible de vérifier l'état du listener pynput."
+        )
+
+    # -------------------------------------------------------------------------
+    # Informations utilisateur
+    # -------------------------------------------------------------------------
+
+    noms = ", ".join(
+        cfg["cereales"][c]["nom"]
+        for c in choix["cereales"]
+    )
+
+    log.info(
+        "══ BotRecolte prêt : mode %s, céréales : %s",
+        "TEST" if mode_test else "RÉCOLTE",
+        noms,
+    )
+
+    log.info(
+        "Passez sur Dofus."
+    )
+
+    log.info(
+        "[%s] scanner  [%s] pause  [%s] arrêt d'urgence",
+        raccourcis["scanner"].upper(),
+        raccourcis["pause"].upper(),
+        raccourcis["arret_urgence"].upper(),
+    )
+
+    # -------------------------------------------------------------------------
+    # Boucle principale
+    # -------------------------------------------------------------------------
+
     try:
         while not etat.quitter.wait(0.3):
             pass
+
     except KeyboardInterrupt:
+        log.info(
+            "Ctrl+C détecté."
+        )
+
         etat.arret.set()
-    log.info("Au revoir.")
-    ecouteur.stop()
+
+    except Exception:
+        log.exception(
+            "Erreur dans la boucle principale."
+        )
+
+        etat.arret.set()
+
+    finally:
+        log.info(
+            "Arrêt du listener clavier..."
+        )
+
+        try:
+            ecouteur.stop()
+        except Exception:
+            log.exception(
+                "Erreur lors de l'arrêt du listener."
+            )
+
+        log.info(
+            "Au revoir."
+        )
 
 
 # =============================================================================
-#  Outils de calibration
+# Outil : calibration de zone
 # =============================================================================
 
 def outil_zone(cfg: dict, delai: int):
-    """Capture tout l'écran avec une grille en points pour régler zone_jeu et
-    zones_exclues, et affiche le facteur d'échelle Retina mesuré."""
+    """Capture l'écran avec une grille pour calibrer la zone de jeu."""
+
     import cv2
     import mss
     import numpy as np
 
     import vision
-    log.info("Passez sur Dofus : capture dans %d s…", delai)
+
+    log.info(
+        "Passez sur Dofus : capture dans %d s…",
+        delai,
+    )
+
     time.sleep(delai)
+
     with mss.mss() as sct:
         mon = sct.monitors[1]
-        img = cv2.cvtColor(np.asarray(sct.grab(mon)), cv2.COLOR_BGRA2BGR)
+
+        img = cv2.cvtColor(
+            np.asarray(sct.grab(mon)),
+            cv2.COLOR_BGRA2BGR,
+        )
+
     e = img.shape[1] / mon["width"]
-    log.info("Écran : %dx%d points, capture %dx%d pixels → échelle %.2f",
-             mon["width"], mon["height"], img.shape[1], img.shape[0], e)
-    # Capture brute (sans grille) : utile comme carte de test (assets/cartes/).
-    vision.enregistrer(Path(cfg["debug"]["dossier"]) / "ecran_brut.png", img.copy())
-    frame = vision.Frame(img, mon["left"], mon["top"], e)
-    for p in range(0, mon["width"], 50):
+
+    log.info(
+        "Écran : %dx%d points, capture %dx%d pixels → échelle %.2f",
+        mon["width"],
+        mon["height"],
+        img.shape[1],
+        img.shape[0],
+        e,
+    )
+
+    dossier = Path(
+        cfg["debug"]["dossier"]
+    )
+
+    dossier.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    vision.enregistrer(
+        dossier / "ecran_brut.png",
+        img.copy(),
+    )
+
+    frame = vision.Frame(
+        img,
+        mon["left"],
+        mon["top"],
+        e,
+    )
+
+    # Grille verticale
+    for p in range(
+        0,
+        mon["width"],
+        50,
+    ):
         x = int(p * e)
-        cv2.line(img, (x, 0), (x, img.shape[0]), (255, 255, 0) if p % 100 == 0 else (120, 120, 0), 1)
+
+        cv2.line(
+            img,
+            (x, 0),
+            (x, img.shape[0]),
+            (
+                (255, 255, 0)
+                if p % 100 == 0
+                else (120, 120, 0)
+            ),
+            1,
+        )
+
         if p % 100 == 0:
-            cv2.putText(img, str(p), (x + 3, int(12 * e)), cv2.FONT_HERSHEY_SIMPLEX, 0.35 * e, (255, 255, 0), 1)
-    for p in range(0, mon["height"], 50):
+            cv2.putText(
+                img,
+                str(p),
+                (
+                    x + 3,
+                    int(12 * e),
+                ),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.35 * e,
+                (255, 255, 0),
+                1,
+            )
+
+    # Grille horizontale
+    for p in range(
+        0,
+        mon["height"],
+        50,
+    ):
         y = int(p * e)
-        cv2.line(img, (0, y), (img.shape[1], y), (255, 255, 0) if p % 100 == 0 else (120, 120, 0), 1)
+
+        cv2.line(
+            img,
+            (0, y),
+            (img.shape[1], y),
+            (
+                (255, 255, 0)
+                if p % 100 == 0
+                else (120, 120, 0)
+            ),
+            1,
+        )
+
         if p % 100 == 0:
-            cv2.putText(img, str(p), (3, y - 3), cv2.FONT_HERSHEY_SIMPLEX, 0.35 * e, (255, 255, 0), 1)
+            cv2.putText(
+                img,
+                str(p),
+                (
+                    3,
+                    y - 3,
+                ),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.35 * e,
+                (255, 255, 0),
+                1,
+            )
+
+    # Zone de jeu
     z = cfg["ecran"]["zone_jeu"]
-    x0, y0 = frame.vers_pixels(z["left"], z["top"])
-    x1, y1 = frame.vers_pixels(z["left"] + z["width"], z["top"] + z["height"])
-    cv2.rectangle(img, (x0, y0), (x1, y1), (0, 255, 0), max(2, int(2 * e)))
-    for ze in cfg["ecran"].get("zones_exclues") or []:
-        a = frame.vers_pixels(ze["left"], ze["top"])
-        b = frame.vers_pixels(ze["left"] + ze["width"], ze["top"] + ze["height"])
-        cv2.rectangle(img, a, b, (0, 0, 255), max(2, int(2 * e)))
-    sortie = Path(cfg["debug"]["dossier"]) / "zone_ecran.png"
-    vision.enregistrer(sortie, img)
-    log.info("→ %s  (vert = zone_jeu, rouge = zones exclues, grille en points)", sortie)
 
+    x0, y0 = frame.vers_pixels(
+        z["left"],
+        z["top"],
+    )
 
-def outil_hsv(cfg: dict, cereale: str, fichiers: list[str]):
-    import vision
-    images = [img for f in fichiers if (img := vision.lire_image(Path(f))) is not None]
-    if not images:
-        log.error("Aucune image lisible.")
-        return
-    plage = vision.suggerer_plage_hsv(images)
-    nom = cfg["cereales"].get(cereale, {}).get("nom", cereale)
-    log.info("Plage HSV suggérée pour %s (%d image(s)) :", nom, len(images))
-    print(f'\n  {cereale}: {{nom: "{nom}", calibre: true, hsv: {plage}}}\n')
-    log.info("Copiez cette ligne dans config.yaml > cereales, puis relancez un test.")
+    x1, y1 = frame.vers_pixels(
+        z["left"] + z["width"],
+        z["top"] + z["height"],
+    )
+
+    cv2.rectangle(
+        img,
+        (x0, y0),
+        (x1, y1),
+        (0, 255, 0),
+        max(2, int(2 * e)),
+    )
+
+    # Zones exclues
+    for ze in (
+        cfg["ecran"].get("zones_exclues")
+        or []
+    ):
+        a = frame.vers_pixels(
+            ze["left"],
+            ze["top"],
+        )
+
+        b = frame.vers_pixels(
+            ze["left"] + ze["width"],
+            ze["top"] + ze["height"],
+        )
+
+        cv2.rectangle(
+            img,
+            a,
+            b,
+            (0, 0, 255),
+            max(2, int(2 * e)),
+        )
+
+    sortie = (
+        dossier /
+        "zone_ecran.png"
+    )
+
+    vision.enregistrer(
+        sortie,
+        img,
+    )
+
+    log.info(
+        "→ %s",
+        sortie,
+    )
 
 
 # =============================================================================
-#  Entrée
+# Outil : HSV
+# =============================================================================
+
+def outil_hsv(
+    cfg: dict,
+    cereale: str,
+    fichiers: list[str],
+):
+    import vision
+
+    images = [
+        img
+        for f in fichiers
+        if (
+            img := vision.lire_image(
+                Path(f)
+            )
+        ) is not None
+    ]
+
+    if not images:
+        log.error(
+            "Aucune image lisible."
+        )
+        return
+
+    plage = vision.suggerer_plage_hsv(
+        images
+    )
+
+    nom = (
+        cfg["cereales"]
+        .get(cereale, {})
+        .get("nom", cereale)
+    )
+
+    log.info(
+        "Plage HSV suggérée pour %s (%d image(s)) :",
+        nom,
+        len(images),
+    )
+
+    print(
+        f'\n  {cereale}: '
+        f'{{nom: "{nom}", calibre: true, hsv: {plage}}}\n'
+    )
+
+    log.info(
+        "Copiez cette ligne dans config.yaml > cereales, "
+        "puis relancez un test."
+    )
+
+
+# =============================================================================
+# Entrée principale
 # =============================================================================
 
 def main():
-    p = argparse.ArgumentParser(description="Bot de récolte de céréales (Dofus 3, macOS).")
-    p.add_argument("--config", default=str(RACINE / "config.yaml"))
-    p.add_argument("-v", "--verbeux", action="store_true", help="logs détaillés")
-    p.add_argument("--test", action="store_true", help="présélectionne le mode test")
-    p.add_argument("--cereales", help="ex. ble,orge : saute l'interface de sélection")
-    p.add_argument("--mode", choices=["test", "recolte"], help="avec --cereales")
-    sous = p.add_subparsers(dest="commande")
-    sous.add_parser("permissions", help="vérifie les permissions macOS")
-    pz = sous.add_parser("zone", help="capture l'écran avec une grille pour calibrer la zone de jeu")
-    pz.add_argument("--delai", type=int, default=5)
-    pa = sous.add_parser("analyser", help="détection hors ligne sur une ou plusieurs images")
-    pa.add_argument("images", nargs="+")
-    pa.add_argument("--cereales", default=argparse.SUPPRESS, help="ex. ble,orge (défaut : toutes)")
-    ph = sous.add_parser("hsv", help="suggère une plage HSV à partir d'extraits")
-    ph.add_argument("cereale")
-    ph.add_argument("images", nargs="+")
-    args = p.parse_args()
+    parser = argparse.ArgumentParser(
+        description=(
+            "Bot de récolte de céréales "
+            "(Dofus 3, macOS)."
+        )
+    )
 
-    configurer_logs(args.verbeux)
-    cfg = charger_config(args.config)
-    cereales_arg = [c.strip() for c in args.cereales.split(",")] if args.cereales else None
+    parser.add_argument(
+        "--config",
+        default=str(
+            RACINE / "config.yaml"
+        ),
+    )
+
+    parser.add_argument(
+        "-v",
+        "--verbeux",
+        action="store_true",
+        help="logs détaillés",
+    )
+
+    parser.add_argument(
+        "--test",
+        action="store_true",
+        help="présélectionne le mode test",
+    )
+
+    parser.add_argument(
+        "--cereales",
+        help="ex. ble,orge : saute l'interface",
+    )
+
+    parser.add_argument(
+        "--mode",
+        choices=[
+            "test",
+            "recolte",
+        ],
+        help="avec --cereales",
+    )
+
+    sous = parser.add_subparsers(
+        dest="commande"
+    )
+
+    sous.add_parser(
+        "permissions",
+        help="vérifie les permissions macOS",
+    )
+
+    pz = sous.add_parser(
+        "zone",
+        help=(
+            "capture l'écran avec une grille "
+            "pour calibrer la zone de jeu"
+        ),
+    )
+
+    pz.add_argument(
+        "--delai",
+        type=int,
+        default=5,
+    )
+
+    pa = sous.add_parser(
+        "analyser",
+        help=(
+            "détection hors ligne "
+            "sur une ou plusieurs images"
+        ),
+    )
+
+    pa.add_argument(
+        "images",
+        nargs="+",
+    )
+
+    pa.add_argument(
+        "--cereales",
+        default=argparse.SUPPRESS,
+        help="ex. ble,orge",
+    )
+
+    ph = sous.add_parser(
+        "hsv",
+        help="suggère une plage HSV",
+    )
+
+    ph.add_argument(
+        "cereale"
+    )
+
+    ph.add_argument(
+        "images",
+        nargs="+",
+    )
+
+    # Commande interne : utilisée par le programme lui-même pour afficher
+    # la fenêtre de choix dans un processus séparé. Pas destinée à l'usage
+    # manuel.
+    ps = sous.add_parser(
+        "_selecteur",
+        help=argparse.SUPPRESS,
+    )
+
+    ps.add_argument(
+        "--sortie",
+        required=True,
+    )
+
+    ps.add_argument(
+        "--defaut-test",
+        action="store_true",
+    )
+
+    args = parser.parse_args()
+
+    # -------------------------------------------------------------------------
+    # Logs
+    # -------------------------------------------------------------------------
+
+    configurer_logs(
+        args.verbeux
+    )
+
+    log.info(
+        "BotRecolte : démarrage"
+    )
+
+    log.info(
+        "Python : %s",
+        sys.version.split()[0],
+    )
+
+    # -------------------------------------------------------------------------
+    # Configuration
+    # -------------------------------------------------------------------------
+
+    cfg = charger_config(
+        args.config
+    )
+
+    cereales_arg = (
+        [
+            c.strip()
+            for c in args.cereales.split(",")
+        ]
+        if args.cereales
+        else None
+    )
+
     if cereales_arg:
-        inconnues = [c for c in cereales_arg if c not in cfg["cereales"]]
+        inconnues = [
+            c
+            for c in cereales_arg
+            if c not in cfg["cereales"]
+        ]
+
         if inconnues:
-            p.error(f"céréale(s) inconnue(s) : {inconnues} (choix : {', '.join(cfg['cereales'])})")
+            parser.error(
+                "céréale(s) inconnue(s) : "
+                f"{inconnues} "
+                f"(choix : "
+                f"{', '.join(cfg['cereales'])})"
+            )
+
+    # -------------------------------------------------------------------------
+    # Sélecteur (processus séparé, commande interne)
+    # -------------------------------------------------------------------------
+
+    if args.commande == "_selecteur":
+        from selector import choisir
+
+        choix_selection = choisir(
+            cfg,
+            defaut_test=args.defaut_test,
+        )
+
+        Path(args.sortie).write_text(
+            json.dumps(choix_selection)
+            if choix_selection
+            else "",
+            encoding="utf-8",
+        )
+
+        return
+
+    # -------------------------------------------------------------------------
+    # Permissions
+    # -------------------------------------------------------------------------
 
     if args.commande == "permissions":
-        sys.exit(0 if controler_permissions(bloquant=True) else 1)
+        sys.exit(
+            0
+            if controler_permissions(
+                bloquant=True
+            )
+            else 1
+        )
+
+    # -------------------------------------------------------------------------
+    # HSV
+    # -------------------------------------------------------------------------
+
     if args.commande == "hsv":
-        outil_hsv(cfg, args.cereale, args.images)
+        outil_hsv(
+            cfg,
+            args.cereale,
+            args.images,
+        )
         return
+
+    # -------------------------------------------------------------------------
+    # Analyse
+    # -------------------------------------------------------------------------
+
     if args.commande == "analyser":
         from harvester import analyser_image
+
         for img in args.images:
-            analyser_image(cfg, img, cereales_arg or list(cfg["cereales"]))
+            analyser_image(
+                cfg,
+                img,
+                cereales_arg
+                or list(cfg["cereales"]),
+            )
+
         return
+
+    # -------------------------------------------------------------------------
+    # Zone
+    # -------------------------------------------------------------------------
+
     if args.commande == "zone":
-        if controler_permissions(bloquant=True):
-            outil_zone(cfg, args.delai)
+        if controler_permissions(
+            bloquant=True
+        ):
+            outil_zone(
+                cfg,
+                args.delai,
+            )
+
         return
 
-    # --- Lancement normal ---------------------------------------------------
-    log.info("Vérification des permissions macOS :")
-    if not controler_permissions(bloquant=True):
+    # -------------------------------------------------------------------------
+    # Lancement normal
+    # -------------------------------------------------------------------------
+
+    log.info(
+        "Vérification des permissions macOS :"
+    )
+
+    if not controler_permissions(
+        bloquant=True
+    ):
         sys.exit(1)
-    if cereales_arg:
-        choix = {"cereales": cereales_arg, "mode": args.mode or ("test" if args.test else "recolte"),
-                 "survol": cfg["debug"].get("survol_en_test", True)}
-    else:
-        from selector import choisir
-        choix = choisir(cfg, defaut_test=args.test or cfg["debug"].get("actif", False))
-    if not choix:
-        log.info("Annulé.")
-        return
-    lancer_bot(cfg, choix)
 
+    if cereales_arg:
+
+        choix = {
+            "cereales": cereales_arg,
+
+            "mode": (
+                args.mode
+                or (
+                    "test"
+                    if args.test
+                    else "recolte"
+                )
+            ),
+
+            "survol": cfg["debug"].get(
+                "survol_en_test",
+                True,
+            ),
+        }
+
+    else:
+
+        # tkinter tourne dans un processus séparé (voir
+        # choisir_en_sous_processus) pour ne pas entrer en conflit
+        # avec le listener clavier pynput sur macOS.
+        choix = choisir_en_sous_processus(
+            args.config,
+            defaut_test=bool(
+                args.test
+                or cfg["debug"].get(
+                    "actif",
+                    False,
+                )
+            ),
+        )
+
+    if not choix:
+        log.info(
+            "Annulé."
+        )
+        return
+
+    lancer_bot(
+        cfg,
+        choix,
+    )
+
+
+# =============================================================================
+# Lancement
+# =============================================================================
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+
+    except KeyboardInterrupt:
+        print("\nArrêt demandé.")
+
+    except Exception:
+        log.exception(
+            "ERREUR FATALE PYTHON"
+        )
+        raise

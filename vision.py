@@ -62,6 +62,15 @@ class Frame:
         return (int(round((px - self.left) * self.echelle)),
                 int(round((py - self.top) * self.echelle)))
 
+    def reduire(self, pixels_par_point: float | None) -> "Frame":
+        """Copie redimensionnée à `pixels_par_point` (1.0 = une image en
+        points). La détection y est environ 4x plus rapide qu'en Retina."""
+        if not pixels_par_point or pixels_par_point >= self.echelle - 1e-3:
+            return self
+        f = pixels_par_point / self.echelle
+        img = cv2.resize(self.image, None, fx=f, fy=f, interpolation=cv2.INTER_AREA)
+        return Frame(img, self.left, self.top, pixels_par_point)
+
 
 # =============================================================================
 #  Capture (mss)
@@ -131,9 +140,11 @@ def lire_image(f: Path) -> np.ndarray | None:
 
 
 def fichiers_images(dossier: Path) -> list[Path]:
+    """Images d'un dossier ET de ses sous-dossiers (.png, .jpg...)."""
     if not dossier.is_dir():
         return []
-    return [f for f in sorted(dossier.iterdir()) if f.suffix.lower() in EXTENSIONS_IMAGES]
+    return [f for f in sorted(dossier.rglob("*"))
+            if f.is_file() and f.suffix.lower() in EXTENSIONS_IMAGES and not f.name.startswith(".")]
 
 
 def charger_images(dossier: Path) -> list[np.ndarray]:
@@ -141,38 +152,75 @@ def charger_images(dossier: Path) -> list[np.ndarray]:
     return [img for f in fichiers_images(dossier) if (img := lire_image(f)) is not None]
 
 
+@dataclass
+class Modele:
+    """Une image de référence (template) et son nom de fichier."""
+    nom: str
+    image: np.ndarray        # BGR, à la résolution de la capture d'origine
+
+
+def charger_modeles(dossier: Path) -> list[Modele]:
+    return [Modele(f.name, img) for f in fichiers_images(dossier) if (img := lire_image(f)) is not None]
+
+
+def _redim(img: np.ndarray, e: float) -> np.ndarray:
+    if abs(e - 1.0) < 1e-3:
+        return img
+    return cv2.resize(img, None, fx=e, fy=e, interpolation=cv2.INTER_AREA if e < 1 else cv2.INTER_LINEAR)
+
+
+def _carte_scores(image: np.ndarray, tpl: np.ndarray, gris: bool) -> np.ndarray | None:
+    th, tw = tpl.shape[:2]
+    if th > image.shape[0] or tw > image.shape[1] or th < 6 or tw < 6:
+        return None
+    if gris:
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+        tpl = cv2.cvtColor(tpl, cv2.COLOR_BGR2GRAY) if tpl.ndim == 3 else tpl
+    res = cv2.matchTemplate(image, tpl, cv2.TM_CCOEFF_NORMED)
+    return np.nan_to_num(res, nan=-1.0, posinf=-1.0, neginf=-1.0)
+
+
 def meilleur_match(image: np.ndarray, templates: Iterable[np.ndarray],
-                   echelles: Iterable[float] = (1.0,)) -> tuple[float, tuple[int, int], tuple[int, int]]:
-    """Retourne (score, (x, y) du centre, (w, h)) du meilleur template."""
+                   echelles: Iterable[float] = (1.0,), gris: bool = False
+                   ) -> tuple[float, tuple[int, int], tuple[int, int]]:
+    """Retourne (score, (x, y) du centre, (w, h)) du meilleur template, toutes
+    échelles confondues. Score = -1 si rien n'a pu être comparé."""
     meilleur = (-1.0, (0, 0), (0, 0))
     for tpl in templates:
         for e in echelles:
-            t = tpl if e == 1.0 else cv2.resize(tpl, None, fx=e, fy=e)
-            th, tw = t.shape[:2]
-            if th > image.shape[0] or tw > image.shape[1] or th < 4 or tw < 4:
+            t = _redim(tpl, e)
+            res = _carte_scores(image, t, gris)
+            if res is None:
                 continue
-            res = cv2.matchTemplate(image, t, cv2.TM_CCOEFF_NORMED)
             _, score, _, loc = cv2.minMaxLoc(res)
             if score > meilleur[0]:
+                th, tw = t.shape[:2]
                 meilleur = (float(score), (loc[0] + tw // 2, loc[1] + th // 2), (tw, th))
     return meilleur
 
 
 def tous_les_matchs(image: np.ndarray, templates: Iterable[np.ndarray],
-                    echelles: Iterable[float], seuil: float) -> list[tuple[float, int, int, int, int]]:
-    """Toutes les positions où un template dépasse le seuil :
-    liste de (score, cx, cy, w, h), avant dédoublonnage."""
+                    echelles: Iterable[float], seuil: float, gris: bool = False,
+                    max_par_template: int = 150) -> list[tuple[float, int, int, int, int]]:
+    """Positions où un template dépasse le seuil : liste de (score, cx, cy, w, h).
+    On ne garde que les maximums locaux de la carte de scores (un seul point
+    par objet, au lieu de centaines de pixels voisins)."""
     resultats = []
     for tpl in templates:
         for e in echelles:
-            t = tpl if e == 1.0 else cv2.resize(tpl, None, fx=e, fy=e)
-            th, tw = t.shape[:2]
-            if th > image.shape[0] or tw > image.shape[1] or th < 4 or tw < 4:
+            t = _redim(tpl, e)
+            res = _carte_scores(image, t, gris)
+            if res is None:
                 continue
-            res = cv2.matchTemplate(image, t, cv2.TM_CCOEFF_NORMED)
-            ys, xs = np.where(res >= seuil)
+            th, tw = t.shape[:2]
+            k = max(3, (min(tw, th) // 2) | 1)
+            pics = (res >= seuil) & (res >= cv2.dilate(res, np.ones((k, k), np.uint8)))
+            ys, xs = np.nonzero(pics)
+            if len(xs) > max_par_template:
+                ordre = np.argsort(res[ys, xs])[::-1][:max_par_template]
+                ys, xs = ys[ordre], xs[ordre]
             for x, y in zip(xs, ys):
-                resultats.append((float(res[y, x]), x + tw // 2, y + th // 2, tw, th))
+                resultats.append((float(res[y, x]), int(x) + tw // 2, int(y) + th // 2, tw, th))
     return resultats
 
 
@@ -198,101 +246,143 @@ class Detecteur(Protocol):
 
 
 class DetecteurHsvTemplate:
-    """Masque de couleur HSV + contours, complété par du template matching
-    sur les images de assets/cereales/<id>/mure/. Les images de
-    assets/cereales/<id>/epuisee/ servent à écarter les céréales récoltées."""
+    """Détection principale par template matching sur VOS images en jeu
+    (assets/cereales/<id>/mure/), à plusieurs échelles. Les images de
+    assets/cereales/<id>/epuisee/ servent à écarter les céréales fauchées.
+
+    La couleur (HSV + contours) ne sert que :
+      - de secours pour une céréale qui n'a encore aucune image « mûre » ;
+      - de bonus de score quand elle confirme un template.
+    En jeu, l'herbe et le sol ont souvent la même teinte que les céréales :
+    la couleur seule produit beaucoup de faux candidats."""
 
     def __init__(self, cfg: dict):
         self.cfg = cfg
         self.d = cfg["detection"]
         self.cereales_cfg = cfg["cereales"]
-        self.templates_mures: dict[str, list[np.ndarray]] = {}
-        self.templates_epuisees: dict[str, list[np.ndarray]] = {}
+        self.echelle_assets = float(self.d.get("echelle_images_assets", 2.0))
+        self.mures: dict[str, list[Modele]] = {}
+        self.epuisees: dict[str, list[Modele]] = {}
         for cid in self.cereales_cfg:
             base = ASSETS / "cereales" / cid
-            self.templates_mures[cid] = charger_images(base / "mure")
-            self.templates_epuisees[cid] = charger_images(base / "epuisee")
-            if self.templates_mures[cid]:
-                log.debug("%s : %d template(s) mûre(s), %d épuisée(s)", cid,
-                          len(self.templates_mures[cid]), len(self.templates_epuisees[cid]))
+            self.mures[cid] = charger_modeles(base / "mure")
+            self.epuisees[cid] = charger_modeles(base / "epuisee")
+
+    def resume_images(self, cereales: list[str]) -> str:
+        return ", ".join(f"{c}: {len(self.mures.get(c, []))} mûre(s)/{len(self.epuisees.get(c, []))} épuisée(s)"
+                         for c in cereales)
+
+    def echelles(self, frame: Frame) -> list[float]:
+        """Facteurs appliqués aux images de assets/ pour les amener à la
+        résolution de la capture (vos captures Retina = 2 px par point)."""
+        base = frame.echelle / self.echelle_assets
+        return [base * e for e in self.d["echelles_template"]]
 
     def detecter(self, frame: Frame, cereales: list[str]) -> list[Candidat]:
         img = frame.image
-        e2 = frame.echelle ** 2
-        aire_min, aire_max = self.d["aire_min"] * e2, self.d["aire_max"] * e2
-        k = int(self.d["noyau_morpho"])
-        noyau = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
         candidats: list[Candidat] = []
-
         for cid in cereales:
             ccfg = self.cereales_cfg.get(cid)
             if not ccfg:
                 log.warning("Céréale inconnue dans la config : %s", cid)
                 continue
+            modeles = self.mures.get(cid) or []
+            if not modeles and not self.d.get("couleur_si_pas_d_image", False):
+                continue   # pas d'image en jeu : céréale ignorée (voir config)
 
-            # --- 1) Couleur + contours ---------------------------------------
-            masque = masque_hsv(img, ccfg["hsv"])
-            masque = cv2.morphologyEx(masque, cv2.MORPH_OPEN, noyau)
-            masque = cv2.morphologyEx(masque, cv2.MORPH_CLOSE, noyau, iterations=2)
-            contours, _ = cv2.findContours(masque, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            couleur: list[Candidat] = []
-            for c in contours:
-                aire = cv2.contourArea(c)
-                if not aire_min <= aire <= aire_max:
-                    continue
-                x, y, w, h = cv2.boundingRect(c)
-                ratio = h / max(w, 1)
-                if not self.d["ratio_min"] <= ratio <= self.d["ratio_max"]:
-                    continue
-                # Score couleur : remplissage de la boîte par le masque.
-                remplissage = aire / max(w * h, 1)
-                couleur.append(Candidat(x + w // 2, y + h // 2, w, h, cid,
-                                        round(0.4 + 0.3 * min(remplissage, 1.0), 3), "couleur"))
-
-            # --- 2) Template matching -----------------------------------------
-            tpl = self.templates_mures.get(cid) or []
+            # --- 1) Template matching (méthode principale) -------------------
             templates: list[Candidat] = []
-            if tpl:
-                echelles = [e * frame.echelle / 2.0 for e in self.d["echelles_template"]]
-                for score, cx, cy, w, h in tous_les_matchs(img, tpl, echelles, self.d["seuil_template"]):
+            if modeles:
+                for score, cx, cy, w, h in tous_les_matchs(img, [m.image for m in modeles],
+                                                           self.echelles(frame), self.d["seuil_template"]):
                     templates.append(Candidat(cx, cy, w, h, cid, round(score, 3), "template"))
-                templates = fusionner(templates, self.d["distance_fusion"] * frame.echelle)
+                templates = fusionner(templates, self._distance(frame, templates))
 
-            # --- 3) Combinaison ---------------------------------------------
+            # --- 2) Couleur (secours, ou confirmation) ------------------------
+            couleur: list[Candidat] = []
+            if ccfg.get("hsv") and (not modeles or self.d.get("garder_couleur_seule", False)
+                                    or self.d.get("bonus_couleur", True)):
+                couleur = self._candidats_couleur(frame, cid, ccfg["hsv"])
             rayon = self.d["distance_fusion"] * frame.echelle
             for t in templates:
-                proche = [c for c in couleur if abs(c.x - t.x) < rayon and abs(c.y - t.y) < rayon]
-                if proche:
+                if any(abs(c.x - t.x) < rayon and abs(c.y - t.y) < rayon for c in couleur):
                     t.source = "couleur+template"
-                    # La boîte couleur colle mieux à l'épi que celle du template.
-                    t.w, t.h = proche[0].w, proche[0].h
-                    t.score = round(min(1.0, t.score + 0.1), 3)
-                    for c in proche:
-                        couleur.remove(c)
+                    t.score = round(min(1.0, t.score + 0.05), 3)
             candidats += templates
-            if self.d.get("garder_couleur_seule", True) or not tpl:
+            if not modeles or self.d.get("garder_couleur_seule", False):
                 candidats += couleur
 
-        candidats = fusionner(candidats, self.d["distance_fusion"] * frame.echelle)
+        candidats = fusionner(candidats, self._distance(frame, candidats))
         self._ecarter_epuisees(frame, candidats)
         return candidats
+
+    def _distance(self, frame: Frame, candidats: list[Candidat]) -> float:
+        """Distance de fusion : la config, bornée par la moitié de la taille
+        des images (deux plants voisins restent distincts)."""
+        d = self.d["distance_fusion"] * frame.echelle
+        if candidats:
+            taille = float(np.median([min(c.w, c.h) for c in candidats]))
+            d = min(d, max(4.0, taille * 0.5))
+        return d
+
+    def _candidats_couleur(self, frame: Frame, cid: str, plages: list) -> list[Candidat]:
+        e2 = frame.echelle ** 2
+        aire_min, aire_max = self.d["aire_min"] * e2, self.d["aire_max"] * e2
+        k = max(1, int(round(self.d["noyau_morpho"] * frame.echelle / 2)))
+        noyau = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+        masque = masque_hsv(frame.image, plages)
+        masque = cv2.morphologyEx(masque, cv2.MORPH_OPEN, noyau)
+        masque = cv2.morphologyEx(masque, cv2.MORPH_CLOSE, noyau, iterations=2)
+        contours, _ = cv2.findContours(masque, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        res = []
+        for c in contours:
+            aire = cv2.contourArea(c)
+            if not aire_min <= aire <= aire_max:
+                continue
+            x, y, w, h = cv2.boundingRect(c)
+            if not self.d["ratio_min"] <= h / max(w, 1) <= self.d["ratio_max"]:
+                continue
+            remplissage = aire / max(w * h, 1)
+            res.append(Candidat(x + w // 2, y + h // 2, w, h, cid,
+                                round(0.4 + 0.3 * min(remplissage, 1.0), 3), "couleur"))
+        return res
 
     def _ecarter_epuisees(self, frame: Frame, candidats: list[Candidat]):
         """Si une image « épuisée » ressemble plus au candidat qu'une image
         « mûre », le candidat est rejeté avant même le survol."""
         marge = self.d["marge_epuisee"]
-        echelles = [e * frame.echelle / 2.0 for e in self.d["echelles_template"]]
+        echelles = self.echelles(frame)
         for c in candidats:
-            ep = self.templates_epuisees.get(c.cereale)
-            if not ep:
+            ep = [m.image for m in self.epuisees.get(c.cereale, [])]
+            if not ep or c.statut != "candidat":
                 continue
             x, y, w, h = c.boite
-            pad = max(w, h)
+            pad = max(w, h) // 2
             roi = frame.image[max(0, y - pad): y + h + pad, max(0, x - pad): x + w + pad]
             s_ep = meilleur_match(roi, ep, echelles)[0]
-            s_mu = meilleur_match(roi, self.templates_mures.get(c.cereale) or [], echelles)[0]
-            if s_ep > max(s_mu, 0) + marge and s_ep >= self.d["seuil_template"]:
-                c.statut, c.raison = "rejete", f"ressemble à épuisée ({s_ep:.2f})"
+            s_mu = meilleur_match(roi, [m.image for m in self.mures.get(c.cereale, [])], echelles)[0]
+            if s_ep > max(s_mu, 0) + marge:
+                c.statut, c.raison = "rejete", f"ressemble à épuisée ({s_ep:.2f} > mûre {s_mu:.2f})"
+
+    def diagnostic(self, frame: Frame, cereales: list[str]) -> list[dict]:
+        """Meilleur score de CHAQUE image de assets/ sur la capture, même sous
+        le seuil : indique tout de suite si une image est inutilisable
+        (mauvaise échelle, mauvais recadrage...)."""
+        lignes = []
+        for cid in cereales:
+            for etat, modeles in (("mure", self.mures.get(cid, [])), ("epuisee", self.epuisees.get(cid, []))):
+                for m in modeles:
+                    meilleur = (-1.0, (0, 0), (0, 0), 0.0)
+                    for e in self.echelles(frame):
+                        s, pos, taille = meilleur_match(frame.image, [m.image], [e])
+                        if s > meilleur[0]:
+                            meilleur = (s, pos, taille, e * self.echelle_assets / frame.echelle)
+                    s, (x, y), _, e = meilleur
+                    px, py = frame.vers_points(x, y)
+                    lignes.append({"cereale": cid, "etat": etat, "image": m.nom, "score": round(s, 3),
+                                   "x_points": round(px), "y_points": round(py), "echelle": round(e, 2),
+                                   "taille_px": f"{m.image.shape[1]}x{m.image.shape[0]}"})
+        return lignes
 
 
 # Registre des détecteurs disponibles (clé = config detection.detecteur).
@@ -348,6 +438,7 @@ class LecteurInfobulle:
 
     def __init__(self, cfg: dict):
         self.cfg = cfg["infobulle"]
+        self.echelle_assets = float(cfg["detection"].get("echelle_images_assets", 2.0))
         self.tpl_faucher = charger_images(ASSETS / "infobulles" / "faucher")
         self.tpl_epuisee = charger_images(ASSETS / "infobulles" / "epuisee")
         self._ocr = None
@@ -369,9 +460,10 @@ class LecteurInfobulle:
     def lire(self, frame: Frame) -> tuple[str, str]:
         """Retourne (verdict, détail)."""
         img = frame.image
-        ech = [frame.echelle / 2.0 * e for e in (0.9, 1.0, 1.1)]
-        s_f = meilleur_match(img, self.tpl_faucher, ech)[0] if self.tpl_faucher else -1
-        s_e = meilleur_match(img, self.tpl_epuisee, ech)[0] if self.tpl_epuisee else -1
+        # Texte : comparaison en niveaux de gris, tolérante à la taille.
+        ech = [frame.echelle / self.echelle_assets * e for e in self.cfg.get("echelles", [0.8, 0.9, 1.0, 1.1, 1.25])]
+        s_f = meilleur_match(img, self.tpl_faucher, ech, gris=True)[0] if self.tpl_faucher else -1
+        s_e = meilleur_match(img, self.tpl_epuisee, ech, gris=True)[0] if self.tpl_epuisee else -1
         seuil = self.cfg["seuil_template"]
         # Sécurité : « Épuisée » l'emporte toujours si elle est détectée.
         if s_e >= seuil:
@@ -407,6 +499,7 @@ class DetecteurSurbrillance:
 
     def __init__(self, cfg: dict):
         self.cfg = cfg["file_attente"]
+        self.echelle_assets = float(cfg["detection"].get("echelle_images_assets", 2.0))
         self.templates = charger_images(ASSETS / "surbrillance")
 
     @property
@@ -416,7 +509,7 @@ class DetecteurSurbrillance:
     def positions(self, frame: Frame) -> list[tuple[int, int]]:
         pts: list[Candidat] = []
         if self.templates:
-            ech = [frame.echelle / 2.0 * e for e in (0.9, 1.0, 1.1)]
+            ech = [frame.echelle / self.echelle_assets * e for e in (0.9, 1.0, 1.1)]
             for s, cx, cy, w, h in tous_les_matchs(frame.image, self.templates, ech,
                                                    self.cfg["seuil_surbrillance"]):
                 pts.append(Candidat(cx, cy, w, h, "surbrillance", s, "template"))
@@ -446,13 +539,14 @@ class DetecteurAlertes:
 
     def __init__(self, cfg: dict):
         self.seuil = cfg["securite"]["seuil_alerte"]
+        self.echelle_assets = float(cfg["detection"].get("echelle_images_assets", 2.0))
         self.templates: list[tuple[str, np.ndarray]] = [
             (f.stem, img) for f in fichiers_images(ASSETS / "alertes")
             if (img := lire_image(f)) is not None]
 
     def verifier(self, frame: Frame) -> str | None:
         """Nom de l'alerte détectée, ou None."""
-        ech = [frame.echelle / 2.0]
+        ech = [frame.echelle / self.echelle_assets * e for e in (0.9, 1.0, 1.1)]
         for nom, tpl in self.templates:
             if meilleur_match(frame.image, [tpl], ech)[0] >= self.seuil:
                 return nom

@@ -63,34 +63,71 @@ Si Dofus n'est plus au premier plan, il se met en **pause** (reprise avec P).
 Le coin haut gauche de l'écran déclenche aussi l'arrêt natif de pyautogui.
 Le bot n'envoie aucune touche au jeu : il ne fait que des clics gauches.
 
-## Phase 1 : test / détection (à faire en premier)
+## Comment la détection fonctionne
 
-Le mode **Test** ne clique **jamais** (c'est vérifié dans le code). À chaque
-appui sur N, il capture la carte, détecte les candidats, survole chacun pour
-lire l'infobulle (option), puis enregistre dans `debug/<date>/` :
+**Méthode principale : vos images.** Le bot cherche sur l'écran chaque image
+de `assets/cereales/<céréale>/mure/` (template matching OpenCV, à plusieurs
+tailles, comme `locateOnScreen` dans les bots du type DofusBot/FarmBot). Les
+images de `.../epuisee/` servent à écarter les céréales déjà fauchées.
 
-- `annotee.png` : orange = candidat, vert = « Faucher », rouge = « Épuisée »,
-  bleu = infobulle illisible, gris = ignoré (interface ou déjà en file) ;
-- `capture.png` : capture brute (à copier dans `assets/cartes/`) ;
-- `extraits/<statut>/` : chaque candidat découpé, pour créer des templates ;
-- `infobulles/<verdict>/` : la zone de l'infobulle capturée à chaque survol ;
-- `rapport.csv` et `debug/historique.csv` : pour suivre l'amélioration d'un
-  réglage à l'autre.
+La couleur seule n'est **pas** fiable : en jeu, l'herbe et le sol ont la
+même teinte que l'orge ou le blé. Une céréale cochée qui n'a **aucune** image
+dans `mure/` est donc **ignorée** (message au lancement), sauf si vous activez
+`detection.couleur_si_pas_d_image`.
 
-**Pour améliorer la détection :**
-1. **Infobulles** : dans `infobulles/`, recadrez juste le mot « Faucher » (et
-   « Épuisée ») et placez-le dans `assets/infobulles/faucher/` (`epuisee/`).
-   Tant que ces images manquent (et sans OCR), aucun clic n'est possible.
-2. **Céréales** : recadrez serré de bons extraits (épi mûr, peu de fond) dans
-   `assets/cereales/<id>/mure/`, et les chaumes récoltés dans `.../epuisee/`.
-3. **Couleurs** : `python main.py hsv ble extrait1.png extrait2.png` affiche
-   une plage HSV à coller dans `config.yaml > cereales`.
-4. **Hors jeu** : `python main.py analyser assets/cartes/*.png --cereales ble,orge`
-   rejoue la détection sur des captures enregistrées, sans souris.
-5. **Faux positifs sur l'interface** : ajoutez des `zones_exclues`.
-6. **Surbrillance** : mettez un extrait d'une céréale en surbrillance dans
-   `assets/surbrillance/`. La fin de file est alors détectée précisément ;
-   sans cette image, le bot attend que l'image redevienne stable.
+Au lancement, le terminal affiche les images chargées, par exemple :
+`orge: 1 mûre(s)/1 épuisée(s)`. Si une céréale affiche 0, les images ne sont
+pas au bon endroit.
+
+### Faire de bonnes images (le plus important)
+
+1. Dofus en plein écran, zoom habituel. **Cmd+Maj+4**, puis sélectionnez
+   **un seul plant** mûr, recadré serré (peu d'herbe autour). Sur Retina, la
+   capture est en 2x, ce qui correspond à `detection.echelle_images_assets: 2.0`.
+2. Enregistrez-la dans `assets/cereales/<id>/mure/` (nom libre, .png). Mettez
+   **3 à 6 images** par céréale (plants différents, au soleil et à l'ombre).
+3. Faites de même avec des plants fauchés dans `.../epuisee/`.
+4. Infobulles : recadrez **juste le mot** « Faucher » dans
+   `assets/infobulles/faucher/` et « Épuisé » dans `assets/infobulles/epuisee/`.
+   (Vos images « Faucher », « Epuisé » et orge sont déjà incluses.)
+
+### Mode test (à faire avant la récolte)
+
+Le mode **Test** ne clique **jamais**. À chaque appui sur N, il :
+- affiche le **diagnostic** : le meilleur score de chaque image sur l'écran,
+  comparé au seuil. Un score de 0.40 veut dire que l'image ne correspond pas
+  (mauvaise taille ou mauvais recadrage) ; 0.65 contre un seuil de 0.68 veut
+  dire qu'il suffit de baisser un peu `seuil_template` ;
+- survole chaque candidat, lit l'infobulle et indique **CLIQUERAIT** ou
+  **pas de clic** (avec la raison) ;
+- enregistre dans `debug/<date>/` : `annotee.png` (vert = cliquerait,
+  rouge = épuisé, bleu = infobulle illisible, gris = ignoré),
+  `capture.png`, `extraits/`, `infobulles/`, `rapport.csv` et
+  `diagnostic_images.csv`.
+
+Hors jeu : `python main.py analyser debug/<date>/capture.png --cereales orge`
+rejoue la détection et le diagnostic sur une capture, sans souris.
+
+### Règle de clic (`infobulle.validation`)
+
+| Valeur | Clic si… |
+|---|---|
+| `exigee` | « Faucher » est lu dans l'infobulle |
+| `si_disponible` (défaut) | « Faucher » est lu, **ou** l'infobulle est illisible mais l'image ressemble très fortement (score ≥ `score_min_sans_infobulle`) |
+| `desactivee` | tout candidat trouvé par image (comme les bots simples) |
+
+« Épuisé » lu dans l'infobulle = jamais de clic.
+
+### Réglages utiles
+
+- Rien n'est trouvé : regardez le diagnostic, ajoutez des images ou baissez
+  `detection.seuil_template` (0.68 → 0.6).
+- Des faux positifs : montez `seuil_template`, ajoutez des images dans
+  `epuisee/` ou des `zones_exclues`.
+- Couleurs : `python main.py hsv orge extrait1.png …` suggère une plage HSV
+  (utile seulement en secours).
+- Surbrillance : un extrait d'une céréale en surbrillance dans
+  `assets/surbrillance/` permet de détecter précisément la fin de la file.
 
 ## Calibration de l'écran (Retina)
 
@@ -108,7 +145,7 @@ points et dessine `zone_jeu` (vert) et `zones_exclues` (rouge) dans
 | Fichier | Rôle |
 |---|---|
 | `main.py` | point d'entrée, permissions, raccourcis, outils `zone` / `analyser` / `hsv` |
-| `selector.py` | fenêtre de choix des céréales et du mode (menu terminal en repli) |
+| `selector.py` | fenêtre de choix des céréales et du mode (lancée dans un processus séparé : tkinter et pynput plantent ensemble sur macOS) |
 | `vision.py` | capture mss, détecteur HSV + template (interchangeable), infobulles, surbrillance, alertes, annotation |
 | `mouse.py` | souris humaine : Bézier bruitées, profil de vitesse, dépassement, délais log-normaux |
 | `harvester.py` | boucle de récolte, file d'attente, mode test |
@@ -124,7 +161,7 @@ points et dessine `zone_jeu` (vert) et `zones_exclues` (rouge) dans
 
 ```
 reference/<id>.png          icônes des céréales (fenêtre de sélection uniquement)
-cereales/<id>/mure/         extraits EN JEU de la céréale mûre (templates)
+cereales/<id>/mure/         captures EN JEU d'un plant mûr (templates, méthode principale)
 cereales/<id>/epuisee/      extraits EN JEU de la céréale fauchée
 infobulles/faucher/         mot « Faucher » recadré depuis une infobulle
 infobulles/epuisee/         mot « Épuisée » recadré
@@ -133,6 +170,5 @@ alertes/                    tout ce qui doit arrêter le bot (bouton de combat, 
 cartes/                     captures complètes pour les tests hors ligne
 ```
 
-Les plages HSV des céréales sont des estimations (`calibre: false`). Celles
-du blé et de l'orge viennent des icônes et restent à confirmer en jeu avec le
-mode test.
+Les plages HSV des céréales sont des estimations (`calibre: false`) et ne
+servent qu'en secours.
