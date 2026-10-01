@@ -1,10 +1,10 @@
-"""Circuit : vos cartes photographiées et les zones de clic que vous y dessinez.
+"""Circuit : vos cartes photographiées et les points de clic que vous y placez.
 
   1. Mode « Photos » : N enregistre la carte affichée (circuit/photos/).
-  2. `python main.py zones` : sur chaque photo, vous dessinez les zones où
-     cliquer (une zone = un clic, à un point aléatoire à l'intérieur).
+  2. `python main.py points` : sur chaque photo, vous cliquez sur chaque
+     céréale, à l'endroit où le bot devra cliquer, en choisissant sa céréale.
   3. Mode « Récolte » : N -> le bot reconnaît la carte en la comparant à vos
-     photos, puis clique dans les zones de cette carte.
+     photos, puis clique sur les points des céréales cochées.
 
 Reconnaissance : chaque photo est réduite à une miniature floue en niveaux
 de gris ; on compte la part des pixels quasi identiques avec la capture
@@ -14,9 +14,10 @@ chat, et indépendante de la résolution de capture (Retina ou non).
 Fichiers :
     circuit/cartes.json            noms, photos et zones de chaque carte
     circuit/photos/<id>_<n>.png    photos (1 pixel = 1 point écran)
-Deux sortes de cibles, en POINTS écran :
-    point : {"type": "point", x, y, cereale}  -> clic exactement là (± jitter_point)
-    zone  : {"type": "zone", x, y (centre), w, h, cereale} -> clic à un point aléatoire dedans
+Points de clic, en coordonnées écran (points macOS), stockés dans la clé
+« zones » de cartes.json (nom historique) :
+    {"type": "point", x, y, cereale}  -> clic exactement là (± jitter_point)
+Les anciennes zones rectangulaires d'une version précédente restent lues.
 """
 
 from __future__ import annotations

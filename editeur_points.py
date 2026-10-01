@@ -1,19 +1,20 @@
-"""Éditeur des zones de clic : `python main.py zones`.
+"""Éditeur des points de clic : `python main.py points`.
 
-Affiche la photo de chaque carte de votre circuit. Vous y indiquez où le
-bot doit cliquer. Tout est enregistré automatiquement.
+Affiche la photo de chaque carte de votre circuit. Vous cliquez sur chaque
+céréale, à l'endroit exact où le bot devra cliquer, en choisissant la céréale
+(1-9). À la récolte, le bot ne clique que sur les points des céréales
+cochées. Tout est enregistré automatiquement.
 
 Commandes :
-  clic gauche        POINT de clic : le bot cliquera exactement là (± 2 points)
-  glisser            zone : le bot cliquera à un point aléatoire dedans
-  clic droit         supprime le point ou la zone sous le curseur
-  1-9                choisit la céréale des nouveaux points (voir la légende)
+  1-9                choisit la céréale (voir la légende en bas)
+  clic gauche        point de clic sur la céréale choisie
+  clic droit         supprime le point sous le curseur
   C                  donne la céréale choisie au point sous le curseur
   Z                  annule la dernière modification
   Tab                photo suivante de la même carte (s'il y en a plusieurs)
   R                  renomme la carte
   → / Entrée         carte suivante        ← carte précédente
-  Suppr              supprime la carte (photo + zones)
+  Suppr              supprime la carte (photos + points)
   Échap              quitter
 """
 
@@ -27,14 +28,14 @@ import cv2
 
 from circuit import Circuit, cible_sous, est_point, nouveau_point
 
-log = logging.getLogger("zones")
+log = logging.getLogger("points")
 
 COULEURS = ["#ffd21f", "#9be23c", "#ff8a3d", "#4fc3f7", "#e57373", "#ba68c8",
             "#f5f5f5", "#a1887f", "#81c784", "#ffb74d", "#64b5f6", "#f06292", "#4db6ac"]
 TOUCHES = [str(i) for i in range(1, 10)]
 
 
-class EditeurZones:
+class EditeurPoints:
     def __init__(self, cfg: dict, cereales: list[str], carte: str | None = None):
         import tkinter as tk
         self.tk = tk
@@ -46,22 +47,20 @@ class EditeurZones:
         if carte in self.ids:
             self.index = self.ids.index(carte)
         else:
-            # On commence par la première carte sans zone.
+            # On commence par la première carte sans point de clic.
             for i, ident in enumerate(self.ids):
                 if not self.circuit.cartes[ident].get("zones"):
                     self.index = i
                     break
         self.courante = 0
         self.photo_n = 0
-        self.zones: list[dict] = []
+        self.points: list[dict] = []
         self.historique: list[list[dict]] = []
-        self._debut = None
-        self._rect = None
         self._souris = (0, 0)
         self.zj = cfg["ecran"]["zone_jeu"]
 
         self.racine = tk.Tk()
-        self.racine.title("BotRecolte : zones de clic")
+        self.racine.title("BotRecolte : points de clic")
         self.max_w = max(400, self.racine.winfo_screenwidth() - 60)
         self.max_h = max(300, self.racine.winfo_screenheight() - 190)
         self.canvas = tk.Canvas(self.racine, highlightthickness=0, bg="#111", cursor="crosshair")
@@ -74,9 +73,7 @@ class EditeurZones:
         self._legende()
 
         c = self.canvas
-        c.bind("<ButtonPress-1>", self._appui)
-        c.bind("<B1-Motion>", self._glisse)
-        c.bind("<ButtonRelease-1>", self._relache)
+        c.bind("<ButtonRelease-1>", self._clic)
         for b in ("<Button-2>", "<Button-3>", "<Control-Button-1>"):   # clic droit (macOS : Button-2)
             c.bind(b, self._supprimer_sous)
         c.bind("<Motion>", lambda e: setattr(self, "_souris", (e.x, e.y)))
@@ -99,7 +96,8 @@ class EditeurZones:
         for i, cid in enumerate(self.cereales[:9]):
             nom = self.cfg["cereales"].get(cid, {}).get("nom", cid)
             actif = i == self.courante
-            lbl = self.tk.Label(self.legende, text=f" {TOUCHES[i]} {nom} ",
+            n = sum(1 for p in self.points if p.get("cereale") == cid)
+            lbl = self.tk.Label(self.legende, text=f" {TOUCHES[i]} {nom} ({n}) ",
                                 fg="#000" if actif else COULEURS[i], bg=COULEURS[i] if actif else "#222",
                                 font=("Helvetica", 13, "bold"), padx=4, pady=3)
             lbl.pack(side="left", padx=2, pady=3)
@@ -125,8 +123,8 @@ class EditeurZones:
         if img is None:
             log.warning("Photo illisible pour %s", ident)
             return False
-        self.e = img.shape[1] / self.zj["width"]          # pixels de la photo par point
-        self.zones = copy.deepcopy(self.circuit.zones(ident))
+        self.e = img.shape[1] / self.zj["width"]          # pixels de la photo par point écran
+        self.points = copy.deepcopy(self.circuit.zones(ident))
         self.historique = []
         self.f = min(1.0, self.max_w / img.shape[1], self.max_h / img.shape[0])
         aff = cv2.resize(img, None, fx=self.f, fy=self.f, interpolation=cv2.INTER_AREA) if self.f < 1 else img
@@ -138,8 +136,8 @@ class EditeurZones:
         self._dessiner()
         return True
 
-    # Conversions : écran du canvas <-> points écran du jeu.
-    def _vers_points(self, cx, cy):
+    # Conversions : canvas <-> points écran du jeu.
+    def _vers_ecran(self, cx, cy):
         return self.zj["left"] + cx / self.f / self.e, self.zj["top"] + cy / self.f / self.e
 
     def _vers_canvas(self, px, py):
@@ -150,26 +148,23 @@ class EditeurZones:
 
     def _dessiner(self):
         c = self.canvas
-        c.delete("zone")
-        k = self.e * self.f
-        for i, z in enumerate(self.zones):
-            x, y = self._vers_canvas(z["x"], z["y"])
-            coul = self._couleur(z.get("cereale", ""))
-            if est_point(z):
-                # Cible : cercle + croix, le centre est le point de clic exact.
-                r = 7
-                c.create_oval(x - r, y - r, x + r, y + r, outline="#000", width=4, tags=("zone",))
-                c.create_oval(x - r, y - r, x + r, y + r, outline=coul, width=2, tags=("zone",))
-                c.create_line(x - r - 4, y, x + r + 4, y, fill=coul, width=1, tags=("zone",))
-                c.create_line(x, y - r - 4, x, y + r + 4, fill=coul, width=1, tags=("zone",))
-                c.create_text(x + r + 2, y - r - 2, anchor="sw", fill=coul, font=("Helvetica", 10, "bold"),
-                              text=str(i + 1), tags=("zone",))
-            else:
-                w, h = z["w"] * k / 2, z["h"] * k / 2
-                c.create_rectangle(x - w, y - h, x + w, y + h, outline=coul, width=2, fill=coul,
-                                   stipple="gray25", tags=("zone",))
-                c.create_text(x, y - h - 1, anchor="s", fill=coul, font=("Helvetica", 10, "bold"),
-                              text=str(i + 1), tags=("zone",))
+        c.delete("point")
+        for i, p in enumerate(self.points):
+            x, y = self._vers_canvas(p["x"], p["y"])
+            coul = self._couleur(p.get("cereale", ""))
+            if not est_point(p):
+                # Ancienne zone (version précédente) : affichée pour pouvoir la supprimer.
+                w, h = p["w"] * self.e * self.f / 2, p["h"] * self.e * self.f / 2
+                c.create_rectangle(x - w, y - h, x + w, y + h, outline=coul, width=1, dash=(3, 3), tags=("point",))
+            # Cible : cercle + croix, le centre est le point de clic exact.
+            r = 7
+            c.create_oval(x - r, y - r, x + r, y + r, outline="#000", width=4, tags=("point",))
+            c.create_oval(x - r, y - r, x + r, y + r, outline=coul, width=2, tags=("point",))
+            c.create_line(x - r - 4, y, x + r + 4, y, fill=coul, width=1, tags=("point",))
+            c.create_line(x, y - r - 4, x, y + r + 4, fill=coul, width=1, tags=("point",))
+            c.create_text(x + r + 2, y - r - 2, anchor="sw", fill=coul, font=("Helvetica", 10, "bold"),
+                          text=str(i + 1), tags=("point",))
+        self._legende()
         self._maj_info()
 
     def _maj_info(self):
@@ -181,67 +176,38 @@ class EditeurZones:
         nom = self.cfg["cereales"].get(self.cereales[self.courante], {}).get("nom", "?") if self.cereales else "?"
         self.info.config(text=(
             f"{self.circuit.nom(ident)}  —  carte {self.index + 1}/{len(self.ids)}  —  photo {self.photo_n + 1}/{nb}"
-            f"  —  {sum(1 for z in self.zones if est_point(z))} point(s), "
-            f"{sum(1 for z in self.zones if not est_point(z))} zone(s)  —  cartes sans clic : {sans}\n"
-            f"Céréale : {nom}  |  clic = POINT de clic exact · glisser = zone · clic droit = supprimer · "
-            f"C = céréale · Z = annuler · Tab = autre photo · R = renommer · →/← = cartes · "
-            f"Suppr = supprimer la carte · Échap = quitter  (enregistrement automatique)"))
+            f"  —  {len(self.points)} point(s) de clic  —  cartes sans point : {sans}\n"
+            f"Céréale choisie : {nom} (1-9 pour changer)  |  clic = point de clic · clic droit = supprimer · "
+            f"C = changer la céréale du point · Z = annuler · Tab = autre photo · R = renommer · "
+            f"→/← = cartes · Suppr = supprimer la carte · Échap = quitter  (enregistrement automatique)"))
 
     # ---------------------------------------------------------------- souris
 
-    def _zone_sous(self, cx, cy) -> int | None:
-        px, py = self._vers_points(cx, cy)
-        # Rayon de sélection d'un point : ~9 pixels à l'écran.
-        return cible_sous(self.zones, px, py, rayon_point=9 / (self.e * self.f))
+    def _point_sous(self, cx, cy) -> int | None:
+        px, py = self._vers_ecran(cx, cy)
+        # Rayon de sélection : ~9 pixels à l'écran.
+        return cible_sous(self.points, px, py, rayon_point=9 / (self.e * self.f))
 
     def _enregistrer(self):
-        self.circuit.definir_zones(self.ids[self.index], self.zones)
+        self.circuit.definir_zones(self.ids[self.index], self.points)
         self._dessiner()
 
     def _memoriser(self):
-        self.historique.append(copy.deepcopy(self.zones))
+        self.historique.append(copy.deepcopy(self.points))
 
-    def _appui(self, e):
-        self._debut = (e.x, e.y)
-        self._rect = None
-
-    def _glisse(self, e):
-        if not self._debut:
+    def _clic(self, e):
+        if not self.ids:
             return
-        x0, y0 = self._debut
-        if abs(e.x - x0) + abs(e.y - y0) < 6:
-            return
-        if self._rect is None:
-            self._rect = self.canvas.create_rectangle(x0, y0, e.x, e.y, outline="#fff", dash=(2, 2))
-        else:
-            self.canvas.coords(self._rect, x0, y0, e.x, e.y)
-
-    def _relache(self, e):
-        if not self._debut or not self.ids:
-            return
-        x0, y0 = self._debut
-        self._debut = None
         cereale = self.cereales[self.courante] if self.cereales else ""
-        if self._rect is not None:
-            self.canvas.delete(self._rect)
-            self._rect = None
-            ax, ay = self._vers_points(min(x0, e.x), min(y0, e.y))
-            bx, by = self._vers_points(max(x0, e.x), max(y0, e.y))
-            if bx - ax < 4 or by - ay < 4:
-                return
-            zone = {"type": "zone", "x": round((ax + bx) / 2, 1), "y": round((ay + by) / 2, 1),
-                    "w": round(bx - ax, 1), "h": round(by - ay, 1), "cereale": cereale}
-        else:
-            zone = nouveau_point(*self._vers_points(e.x, e.y), cereale)
         self._memoriser()
-        self.zones.append(zone)
+        self.points.append(nouveau_point(*self._vers_ecran(e.x, e.y), cereale))
         self._enregistrer()
 
     def _supprimer_sous(self, e):
-        i = self._zone_sous(e.x, e.y)
+        i = self._point_sous(e.x, e.y)
         if i is not None:
             self._memoriser()
-            del self.zones[i]
+            del self.points[i]
             self._enregistrer()
 
     # --------------------------------------------------------------- clavier
@@ -251,13 +217,13 @@ class EditeurZones:
         if k in TOUCHES:
             self.choisir(TOUCHES.index(k))
         elif k == "z" and self.historique:
-            self.zones = self.historique.pop()
+            self.points = self.historique.pop()
             self._enregistrer()
         elif k == "c":
-            i = self._zone_sous(*self._souris)
+            i = self._point_sous(*self._souris)
             if i is not None and self.cereales:
                 self._memoriser()
-                self.zones[i]["cereale"] = self.cereales[self.courante]
+                self.points[i]["cereale"] = self.cereales[self.courante]
                 self._enregistrer()
         elif k == "r":
             self.renommer()
@@ -295,7 +261,7 @@ class EditeurZones:
     def supprimer_carte(self):
         from tkinter import messagebox
         ident = self.ids[self.index]
-        if not messagebox.askyesno("Supprimer", f"Supprimer {self.circuit.nom(ident)} (photos et zones) ?",
+        if not messagebox.askyesno("Supprimer", f"Supprimer {self.circuit.nom(ident)} (photos et points) ?",
                                    parent=self.racine):
             return
         self.circuit.supprimer(ident)
@@ -320,5 +286,5 @@ class EditeurZones:
 
 
 def editer(cfg: dict, cereales: list[str], carte: str | None = None):
-    EditeurZones(cfg, cereales, carte).lancer()
+    EditeurPoints(cfg, cereales, carte).lancer()
     log.info("Circuit : %s", Circuit(cfg).resume())

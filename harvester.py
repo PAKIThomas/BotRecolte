@@ -1,11 +1,11 @@
 """Boucle de récolte.
 
-Méthode « zones » (par défaut, config recolte.methode) :
+Méthode « points » (par défaut, config recolte.methode) :
   mode Photos  : N enregistre la carte affichée (circuit.py) ;
-  python main.py zones : vous dessinez les zones de clic sur chaque photo ;
-  mode Récolte : N -> carte reconnue -> clic dans chacune de vos zones
-                 (après lecture de l'infobulle « Faucher ») ;
-  mode Test    : zones dessinées sur la capture + lecture des infobulles, sans clic.
+  python main.py points : vous cliquez sur chaque céréale des photos (par céréale) ;
+  mode Récolte : N -> carte reconnue -> clic sur chacun de vos points des
+                 céréales cochées (après lecture de l'infobulle « Faucher ») ;
+  mode Test    : points dessinés sur la capture + lecture des infobulles, sans clic.
 
 Méthode « detection » (IA ou images), décrite ci-dessous.
 
@@ -53,15 +53,16 @@ class Recolteur:
     def __init__(self, cfg: dict, cereales: list[str], etat: Etat, sons: Sons, mode_test: bool,
                  mode: str | None = None):
         """mode : « photo », « test » ou « recolte ». La méthode vient de
-        config.yaml > recolte.methode : « zones » (vos zones dessinées sur les
-        photos des cartes, par défaut) ou « detection » (IA / images)."""
+        config.yaml > recolte.methode : « points » (vos points de clic placés sur
+        les photos des cartes, par défaut) ou « detection » (IA / images)."""
         self.cfg = cfg
         self.cereales = cereales
         self.etat = etat
         self.sons = sons
         self.mode = mode or ("test" if mode_test else "recolte")
         self.mode_test = self.mode in ("test", "photo")
-        self.methode = cfg.get("recolte", {}).get("methode", "zones")
+        methode = cfg.get("recolte", {}).get("methode", "points")
+        self.methode = "zones" if methode in ("points", "zones") else methode   # « zones » = ancien nom
         self.infobulle = vision.LecteurInfobulle(cfg)
         self.surbrillance = vision.DetecteurSurbrillance(cfg)
         self.alertes = vision.DetecteurAlertes(cfg)
@@ -334,7 +335,7 @@ class Recolteur:
     def _noter_delai(self, d: float):
         self._delais_infobulle = (self._delais_infobulle + [d])[-40:]
 
-    # ------------------------------------------------ méthode « zones »
+    # ------------------------------------------------ méthode « points »
 
     def photographier(self, capture: vision.Capture):
         """Mode Photos : enregistre la carte affichée dans le circuit."""
@@ -344,10 +345,10 @@ class Recolteur:
         nom = self.circuit.nom(ident)
         if nouvelle:
             log.info("📸 Nouvelle carte photographiée : %s (%d carte(s) au total). "
-                     "Dessinez ses zones avec : python main.py zones", nom, len(self.circuit.cartes))
+                     "Placez ses points de clic avec : python main.py points", nom, len(self.circuit.cartes))
         elif len(self.circuit.cartes[ident]["photos"]) > avant.get(ident, 0):
             log.info("📸 Carte déjà connue : %s (ressemblance %.0f %%). Photo ajoutée comme variante "
-                     "(ex. champs récoltés), les zones restent les mêmes.", nom, 100 * score)
+                     "(ex. champs récoltés), les points de clic restent les mêmes.", nom, 100 * score)
         else:
             log.info("📸 Carte déjà photographiée : %s (ressemblance %.0f %%), rien à ajouter.", nom, 100 * score)
         self.sons.jouer("info")
@@ -370,9 +371,9 @@ class Recolteur:
                 log.info("➕ Point de clic ajouté sur %s en (%.0f, %.0f) — %d cible(s).", self.circuit.nom(ident),
                          px, py, len(self.circuit.zones(ident)))
             elif self.circuit.retirer_zone(ident, px, py):
-                log.info("➖ Point/zone retiré(e) sur %s en (%.0f, %.0f).", self.circuit.nom(ident), px, py)
+                log.info("➖ Point de clic retiré sur %s en (%.0f, %.0f).", self.circuit.nom(ident), px, py)
             else:
-                log.info("Aucun point ni zone sous le curseur en (%.0f, %.0f).", px, py)
+                log.info("Aucun point de clic sous le curseur en (%.0f, %.0f).", px, py)
             self.sons.jouer("info")
         except Exception:
             log.exception("Modification de zone impossible.")
@@ -418,11 +419,11 @@ class Recolteur:
         return ordre
 
     def recolter_zones(self, capture: vision.Capture, souris: SourisHumaine, test: bool = False):
-        """Reconnaît la carte puis clique dans les zones que vous avez dessinées.
+        """Reconnaît la carte puis clique sur vos points de clic (céréales cochées).
 
         Avec circuit.verifier_infobulle (par défaut) : clic seulement si
         « Faucher » s'affiche, jamais sur « Épuisé ». Après la file, un
-        passage de vérification reclique les zones encore « Faucher »."""
+        passage de vérification reclique les points encore « Faucher »."""
         cfg_c = self.cfg.get("circuit", {})
         cfg_s = self.cfg["securite"]
         L = vision.LecteurInfobulle
@@ -436,15 +437,15 @@ class Recolteur:
                 vision.enregistrer(self.dossier_debug / datetime.now().strftime("%Y%m%d_%H%M%S") / "capture.png",
                                    frame.image)
             raise ArretBot(f"carte non reconnue ({pourquoi}). Photographiez-la (mode Photos) "
-                           "puis dessinez ses zones (python main.py zones)")
+                           "puis placez ses points de clic (python main.py points)")
         self.carte_id = ident
         indexees = [(i, z) for i, z in enumerate(self.circuit.zones(ident))
                     if not z.get("cereale") or z["cereale"] in self.cereales]
-        log.info("🗺  Carte reconnue : %s (ressemblance %.0f %%) — %d point(s)/zone(s) de clic.",
+        log.info("🗺  Carte reconnue : %s (ressemblance %.0f %%) — %d point(s) de clic.",
                  self.circuit.nom(ident), 100 * score, len(indexees))
         if not indexees:
             raise ArretBot(f"aucun point de clic (pour les céréales choisies) sur {self.circuit.nom(ident)} : "
-                           "placez-les avec python main.py zones")
+                           "placez-les avec python main.py points")
         verifier = cfg_c.get("verifier_infobulle", True) and self.infobulle.operationnel
         if cfg_c.get("verifier_infobulle", True) and not self.infobulle.operationnel:
             log.warning("Pas d'image « Faucher » ni d'OCR : clics sans vérification de l'infobulle.")
@@ -460,14 +461,14 @@ class Recolteur:
             a_faire = self.ordre_zones([(i, z) for i, z in indexees if i not in epuisees], souris.position())
             if not a_faire:
                 break
-            log.info("── Passe %d : %d point(s)/zone(s)", passe, len(a_faire))
+            log.info("── Passe %d : %d point(s)", passe, len(a_faire))
             clics = illisibles = 0
             for k, (i, z) in enumerate(a_faire, 1):
                 self.etat.controle()
                 self.verifier_premier_plan()
                 if cfg_s.get("alertes_avant_chaque_clic", True):
                     self.verifier_alertes(capture)
-                etiquette = (f"[{k}/{len(a_faire)}] {'point' if est_point(z) else 'zone'} {i + 1}"
+                etiquette = (f"[{k}/{len(a_faire)}] point {i + 1}"
                              + (f" ({z['cereale']})" if z.get("cereale") else ""))
                 if verifier:
                     verdict, detail = self.verdict_zone(capture, souris, z)
@@ -503,9 +504,9 @@ class Recolteur:
         self.sons.jouer("fin_carte")
 
     def _test_zones(self, capture, souris, frame, ident, indexees, verifier):
-        """Mode test : dessine les zones sur la capture actuelle (pour vérifier
-        qu'elles tombent bien sur les céréales) et, avec le survol, lit
-        l'infobulle de chaque zone. Aucun clic."""
+        """Mode test : dessine les points sur la capture actuelle (pour vérifier
+        qu'ils tombent bien sur les céréales) et, avec le survol, lit
+        l'infobulle de chaque point. Aucun clic."""
         dossier = self.dossier_debug / datetime.now().strftime("%Y%m%d_%H%M%S")
         img = frame.image.copy()
         survol = self.cfg["debug"].get("survol_en_test", True) and verifier
@@ -518,7 +519,7 @@ class Recolteur:
                 verdict, detail = self.verdict_zone(capture, souris, z)
                 compte[verdict] = compte.get(verdict, 0) + 1
                 coul = {L.FAUCHER: (0, 220, 0), L.EPUISEE: (0, 0, 255)}.get(verdict, (255, 120, 0))
-                log.info("  %s %d → %s", "point" if est_point(z) else "zone", i + 1, {L.FAUCHER: "Faucher (CLIQUERAIT)", L.EPUISEE: "Épuisé"}.get(
+                log.info("  point %d → %s", i + 1, {L.FAUCHER: "Faucher (CLIQUERAIT)", L.EPUISEE: "Épuisé"}.get(
                     verdict, f"pas d'infobulle ({detail})"))
             ep = max(1, int(frame.echelle))
             if est_point(z):
@@ -536,8 +537,8 @@ class Recolteur:
                         coul, max(1, int(frame.echelle / 2)))
         if survol:
             self.eloigner_souris(souris)
-        vision.enregistrer(dossier / "zones.png", img)
-        log.info("══ Test %s : %d point(s)/zone(s)%s → %s/zones.png", self.circuit.nom(ident), len(indexees),
+        vision.enregistrer(dossier / "points.png", img)
+        log.info("══ Test %s : %d point(s)%s → %s/points.png", self.circuit.nom(ident), len(indexees),
                  f" — Faucher {compte['faucher']}, Épuisé {compte['epuisee']}, sans infobulle {compte['inconnu']}"
                  if survol else "", dossier)
         log.info("   Vert = cliquerait, rouge = épuisé, bleu = pas d'infobulle (point mal placé ?), orange = non survolé.")

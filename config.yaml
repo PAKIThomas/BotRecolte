@@ -19,27 +19,27 @@ raccourcis:
   capture_epuisee: "shift+e"    # céréale ÉPUISÉE (ou fausse détection) sous le curseur
 
 # --- Méthode de récolte ------------------------------------------------------
-# zones     : (par défaut) vous photographiez vos cartes (mode Photos, N), vous
-#             dessinez les zones de clic (python main.py zones), le bot
-#             reconnaît la carte et clique exactement dans vos zones.
+# points    : (par défaut) vous photographiez vos cartes (mode Photos, N), vous
+#             cliquez sur chaque céréale des photos en choisissant sa céréale
+#             (python main.py points) ; le bot reconnaît la carte et clique
+#             exactement sur vos points, seulement pour les céréales cochées.
 # detection : le bot cherche lui-même les céréales (IA ou images de assets/).
 recolte:
-  methode: zones
+  methode: points
 
-# --- Circuit (méthode zones) ---------------------------------------------------
+# --- Circuit (méthode points) -------------------------------------------------
 circuit:
-  dossier: "circuit"            # photos des cartes + zones (circuit/cartes.json)
+  dossier: "circuit"            # photos des cartes + points de clic (circuit/cartes.json)
   # Lire l'infobulle avant chaque clic : clic seulement si « Faucher », jamais
-  # sur « Épuisé ». false = clic direct dans chaque zone, sans vérification.
+  # sur « Épuisé ». false = clic direct sur chaque point, sans vérification.
   verifier_infobulle: true
   cliquer_si_illisible: false   # true : cliquer aussi quand aucune infobulle n'est lue
-  # Passages : après la file, un 2e passage reclique les zones encore « Faucher ».
+  # Passages : après la file, un 2e passage reclique les points encore « Faucher ».
   passes: 2
-  # Point de clic (clic simple dans l'éditeur, ou Maj+O) : le bot clique
-  # exactement là, à ± jitter_point près (points écran ; 0 = pile au même pixel).
+  # Le bot clique sur chaque point à ± jitter_point près (points écran ;
+  # 0 = pile au même pixel).
   jitter_point: 2
   rayon_point: 8                # Maj+E retire un point à moins de N points du curseur
-  zone_clic: 0.7                # zone (glisser) : part utilisée pour le point aléatoire
   # Reconnaissance de la carte (ressemblance avec vos photos, 0..1).
   seuil_reconnaissance: 0.80
   marge_ambiguite: 0.04         # refus si deux cartes se ressemblent autant

@@ -10,7 +10,7 @@
   python main.py evaluer [--appliquer]
   python main.py annoter [--cereales avoine,ble]   (IA : annoter les cartes)
   python main.py entrainer                         (IA : entraîner le modèle)
-  python main.py zones [--cereales ble,orge]       (dessiner les zones de clic)
+  python main.py points [--cereales ble,orge]      (placer les points de clic)
   python main.py cartes [--nommer ID NOM] [--oublier ID]   (cartes du circuit)
 """
 
@@ -294,7 +294,7 @@ def lancer_bot(cfg: dict, choix: dict):
         mode=mode,
     )
 
-    methode_zones = recolteur.methode == "zones"
+    methode_zones = recolteur.methode in ("points", "zones")
 
     raccourcis = cfg["raccourcis"]
 
@@ -346,8 +346,8 @@ def lancer_bot(cfg: dict, choix: dict):
             )
             return
 
-        # Méthode « zones » : Maj+O ajoute une zone sous le curseur sur la
-        # carte affichée, Maj+E retire la zone sous le curseur.
+        # Méthode « points » : Maj+O ajoute un point de clic sous le curseur
+        # sur la carte affichée, Maj+E retire le point sous le curseur.
         threading.Thread(
             target=recolteur.zone_au_curseur if methode_zones else collecteur.capture_manuelle,
             args=(type_,) if methode_zones else (type_, sons),
@@ -603,7 +603,7 @@ def lancer_bot(cfg: dict, choix: dict):
     if mode == "photo":
         log.info(
             "Sur chaque carte de votre circuit, appuyez sur [%s] pour la photographier. "
-            "Ensuite : python main.py zones",
+            "Ensuite : python main.py points",
             raccourcis["scanner"].upper(),
         )
 
@@ -620,7 +620,7 @@ def lancer_bot(cfg: dict, choix: dict):
 
     if methode_zones:
         log.info(
-            "[%s] ajouter une zone sous le curseur  [%s] retirer la zone sous le curseur "
+            "[%s] ajouter un point de clic sous le curseur  [%s] retirer le point sous le curseur "
             "(bot au repos ou en pause)",
             raccourcis.get("capture_mure", "shift+o").upper(),
             raccourcis.get("capture_epuisee", "shift+e").upper(),
@@ -1060,14 +1060,15 @@ def main():
     )
 
     pz2 = sous.add_parser(
-        "zones",
-        help="dessiner les zones de clic sur les photos des cartes",
+        "points",
+        aliases=["zones"],
+        help="placer les points de clic (par céréale) sur les photos des cartes",
     )
 
     pz2.add_argument(
         "--cereales",
         default=argparse.SUPPRESS,
-        help="céréales de la légende (ex. ble,orge,avoine)",
+        help="céréales de la légende, touches 1-9 dans cet ordre (ex. ble,orge,avoine)",
     )
 
     pz2.add_argument(
@@ -1252,8 +1253,8 @@ def main():
 
         return
 
-    if args.commande == "zones":
-        from editeur_zones import editer
+    if args.commande in ("points", "zones"):
+        from editeur_points import editer
 
         editer(
             cfg,
@@ -1264,7 +1265,7 @@ def main():
         return
 
     if args.commande == "cartes":
-        if cfg.get("recolte", {}).get("methode", "zones") == "zones":
+        if cfg.get("recolte", {}).get("methode", "points") in ("points", "zones"):
             from circuit import Circuit
 
             base = Circuit(cfg)
@@ -1386,10 +1387,10 @@ def main():
         )
         return
 
-    if choix["mode"] == "zones":
+    if choix["mode"] in ("points", "zones"):
         # L'éditeur n'utilise pas les raccourcis clavier : il tourne ici,
         # sans listener pynput.
-        from editeur_zones import editer
+        from editeur_points import editer
 
         editer(cfg, choix["cereales"])
         return

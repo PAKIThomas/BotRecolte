@@ -12,7 +12,7 @@ ASSETS = Path(__file__).parent / "assets"
 
 
 def choisir(cfg: dict, defaut_test: bool = False) -> dict | None:
-    """Retourne {"cereales": [...], "mode": "photo"|"zones"|"test"|"recolte", "survol": bool}
+    """Retourne {"cereales": [...], "mode": "photo"|"points"|"test"|"recolte", "survol": bool}
     ou None si l'utilisateur annule."""
     try:
         import tkinter  # noqa: F401
@@ -70,14 +70,14 @@ def _fenetre(cfg: dict, defaut_test: bool) -> dict | None:
         row=fin_grille + 2, column=0, sticky="w")
     mode = tk.StringVar(value="test" if defaut_test else "recolte")
     modes = [("1. Photos : N photographie chaque carte de votre circuit", "photo"),
-             ("2. Zones : dessiner les zones de clic sur les photos", "zones"),
-             ("Test : vérifier les zones sur la carte affichée (aucun clic)", "test"),
-             ("3. Récolte : N clique dans les zones de la carte affichée", "recolte")]
+             ("2. Points de clic : cliquer sur chaque céréale des photos", "points"),
+             ("Test : vérifier les points sur la carte affichée (aucun clic)", "test"),
+             ("3. Récolte : N clique sur les points des céréales cochées", "recolte")]
     for k, (texte, valeur) in enumerate(modes):
         ttk.Radiobutton(cadre, text=texte, variable=mode, value=valeur).grid(
             row=fin_grille + 3 + k, column=0, columnspan=3, sticky="w")
     survol = tk.BooleanVar(value=cfg["debug"].get("survol_en_test", True))
-    ttk.Checkbutton(cadre, text="En test : survoler les zones pour lire l'infobulle",
+    ttk.Checkbutton(cadre, text="En test : survoler les points pour lire l'infobulle",
                     variable=survol).grid(row=fin_grille + 7, column=0, columnspan=3, sticky="w", padx=(20, 0))
 
     message = ttk.Label(cadre, text="", foreground="#b00")
@@ -142,7 +142,7 @@ def _terminal(cfg: dict, defaut_test: bool) -> dict | None:
         except (ValueError, IndexError):
             print("Saisie invalide.")
             return None
-    m = input(f"Mode : [p]hotos / [z]ones / [t]est / [r]écolte (défaut {'test' if defaut_test else 'récolte'}) : "
+    m = input(f"Mode : p[h]otos / [p]oints / [t]est / [r]écolte (défaut {'test' if defaut_test else 'récolte'}) : "
               ).strip().lower()
-    mode = {"p": "photo", "z": "zones", "t": "test", "r": "recolte"}.get(m[:1], "test" if defaut_test else "recolte")
+    mode = {"h": "photo", "p": "points", "t": "test", "r": "recolte"}.get(m[:1], "test" if defaut_test else "recolte")
     return {"cereales": choix, "mode": mode, "survol": cfg["debug"].get("survol_en_test", True)}

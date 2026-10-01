@@ -1,9 +1,9 @@
 # BotRecolte : récolte de céréales pour Dofus 3 (macOS)
 
 Bot personnel de test : il pilote la vraie souris comme un humain pour faucher
-les céréales de la carte courante, dans les zones que vous avez dessinées sur
-une photo de chaque carte. Vous changez de carte vous-même, puis vous appuyez
-sur **N**.
+les céréales de la carte courante, aux points de clic que vous avez placés sur
+une photo de chaque carte (seulement pour les céréales cochées). Vous changez
+de carte vous-même, puis vous appuyez sur **N**.
 
 > ⚠️ L'automatisation est interdite par les conditions d'utilisation de Dofus
 > et peut entraîner un bannissement. Usage personnel et à vos risques.
@@ -34,29 +34,37 @@ trois permissions, et elles sont aussi contrôlées à chaque lancement.
 
 ## Utilisation : trois étapes
 
-Vous passez toujours sur les mêmes cartes : vous indiquez **une fois** où
-cliquer sur chacune, et le bot clique ensuite **exactement** à ces endroits.
+Vous passez toujours sur les mêmes cartes. Sur une photo de chaque carte, vous
+indiquez **une fois**, par un clic, où se trouve chaque céréale et de quelle
+céréale il s'agit. Le bot clique ensuite **exactement à ces endroits**, et
+seulement pour les céréales cochées au démarrage. Il n'analyse jamais l'image
+des céréales.
 
 ```bash
-python main.py      # fenêtre : céréales + mode (Photos, Zones, Test, Récolte)
+python main.py      # fenêtre : céréales à cocher + mode (Photos, Points de clic, Test, Récolte)
 ```
 
 **1. Photos.** Mode « Photos ». Sur chaque carte de votre circuit, appuyez
 sur **N** : la carte est photographiée (`circuit/photos/`). Une carte déjà
 photographiée est reconnue et n'est pas dupliquée.
 
-**2. Points de clic.** Mode « Zones » (ou `python main.py zones --cereales ble,orge`).
-Chaque photo s'affiche : **faites un clic gauche sur chaque céréale**, à
-l'endroit exact où le bot devra cliquer. Chaque clic pose une cible numérotée.
-Le bot cliquera exactement là, à ± 2 points près (`circuit.jitter_point`, 0 =
-pile au même pixel). L'enregistrement est automatique.
+**2. Points de clic.** Mode « Points de clic », ou en ligne de commande :
+
+```bash
+python main.py points --cereales ble,orge,avoine
+```
+
+Chaque photo s'affiche. Choisissez la céréale avec **1-9** (la légende en bas
+de la fenêtre indique laquelle est active), puis **faites un clic gauche sur
+chaque céréale de ce type**, à l'endroit exact où le bot devra cliquer.
+Chaque clic pose une cible numérotée, de la couleur de sa céréale.
+L'enregistrement est automatique.
 
 | Dans l'éditeur | Action |
 |---|---|
-| clic gauche | **point de clic** exact sur la céréale |
-| glisser | zone : clic à un point aléatoire dedans (facultatif) |
-| clic droit | supprimer le point ou la zone |
-| 1-9 | céréale des nouveaux points |
+| 1-9 | choisir la céréale (ordre de `--cereales`) |
+| clic gauche | point de clic sur la céréale choisie |
+| clic droit | supprimer le point |
 | C | donner la céréale choisie au point sous le curseur |
 | Z | annuler |
 | Tab | autre photo de la même carte |
@@ -66,46 +74,50 @@ pile au même pixel). L'enregistrement est automatique.
 | Échap | quitter |
 
 **Test (conseillé).** Mode « Test » : N reconnaît la carte, dessine vos
-points sur la capture actuelle (`debug/<date>/zones.png`) et, avec le survol,
-lit l'infobulle de chaque point, **sans cliquer** :
+points sur la capture actuelle (`debug/<date>/points.png`) et, avec le
+survol, lit l'infobulle de chaque point, **sans cliquer** :
 - vert : cliquerait ;
 - rouge : épuisé ;
 - bleu : pas d'infobulle, le point est sans doute mal placé.
 
-**3. Récolte.** Mode « Récolte ». Sur chaque carte, appuyez sur **N** :
+**3. Récolte.** Cochez les céréales voulues, mode « Récolte ». Sur chaque
+carte, appuyez sur **N** :
 1. le bot reconnaît la carte en la comparant à vos photos ;
-2. il survole chacun de vos points, de proche en proche ;
-3. il clique si l'infobulle affiche « Faucher », jamais si elle affiche « Épuisé » ;
+2. il prend les points des céréales cochées, de proche en proche ;
+3. pour chacun, il survole le point et clique s'il lit « Faucher », jamais
+   s'il lit « Épuisé » ;
 4. il attend la fin de la file, puis fait un 2ᵉ passage pour les points encore
    « Faucher » ;
 5. il joue le son de fin de carte.
 
-Carte inconnue (ou trop différente de ses photos) : le bot s'arrête et vous
-le dit. `circuit.verifier_infobulle: false` supprime la lecture de
-l'infobulle : clic direct sur chaque point.
+Le clic tombe sur votre point à ± 2 points d'écran près
+(`circuit.jitter_point`, 0 = pile au même pixel). Avec
+`circuit.verifier_infobulle: false`, il clique directement, sans lire
+l'infobulle. Une carte inconnue (ou trop différente de ses photos) arrête le
+bot, avec un message.
 
 | Touche (config.yaml > raccourcis) | Action |
 |---|---|
 | **N** | photo / test / récolte de la carte, selon le mode |
 | **P** | pause / reprise |
 | **W** | arrêt d'urgence immédiat |
-| **Maj+O** | ajoute un point de clic sous le curseur, sur la carte affichée |
+| **Maj+O** | ajoute un point de clic sous le curseur (céréale : celle cochée, s'il n'y en a qu'une) |
 | **Maj+E** | retire le point sous le curseur |
 | Ctrl+C (terminal) | quitter |
 
 ```bash
-python main.py cartes                                # cartes et nombre de zones
+python main.py cartes                                # cartes et nombre de points
 python main.py cartes --nommer carte_003 "Champ Astrub"
-python main.py cartes --oublier carte_003            # supprime photo + zones
-python main.py zones --carte carte_003               # rouvre une carte précise
+python main.py cartes --oublier carte_003            # supprime photos + points
+python main.py points --carte carte_003              # rouvre une carte précise
 ```
 
-Si vous changez la résolution ou le zoom du jeu, les zones ne tombent plus
-au bon endroit : refaites les photos et les zones.
+Si vous changez la résolution ou le zoom du jeu, les points ne tombent plus
+au bon endroit : refaites les photos et les points.
 
 Le bot s'arrête, joue un son et vous rend la main dans ces cas :
 - carte non reconnue ;
-- plusieurs zones d'affilée sans infobulle ;
+- plusieurs points d'affilée sans infobulle ;
 - une image de `assets/alertes/` est détectée (combat…) ;
 - une erreur survient.
 
@@ -345,9 +357,9 @@ points et dessine `zone_jeu` (vert) et `zones_exclues` (rouge) dans
 | `selector.py` | fenêtre de choix des céréales et du mode (lancée dans un processus séparé : tkinter et pynput plantent ensemble sur macOS) |
 | `vision.py` | capture mss, détecteur HSV + template (interchangeable), infobulles, surbrillance, alertes, annotation |
 | `mouse.py` | souris humaine : Bézier bruitées, profil de vitesse, dépassement, délais log-normaux |
-| `circuit.py` | cartes photographiées, reconnaissance de la carte, zones de clic |
-| `editeur_zones.py` | éditeur des zones (`python main.py zones`) |
-| `harvester.py` | boucle de récolte (zones ou détection), file d'attente, mode test |
+| `circuit.py` | cartes photographiées, reconnaissance de la carte, points de clic |
+| `editeur_points.py` | éditeur des points de clic (`python main.py points`) |
+| `harvester.py` | boucle de récolte (points ou détection), file d'attente, mode test |
 | `apprentissage.py` | captures Maj+O / Maj+E, collecte auto, `evaluer` |
 | `ia.py` | IA : dataset de cartes, entraînement YOLO, détecteur |
 | `annoteur.py` | fenêtre d'annotation des cartes (`python main.py annoter`) |
