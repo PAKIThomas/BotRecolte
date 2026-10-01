@@ -82,19 +82,29 @@ survol, lit l'infobulle de chaque point, **sans cliquer** :
 
 **3. Récolte.** Cochez les céréales voulues, mode « Récolte ». Sur chaque
 carte, appuyez sur **N** :
-1. le bot reconnaît la carte en la comparant à vos photos ;
+1. le bot lit les **coordonnées de la carte** (ex. « -28, -37 », en haut à
+   gauche, sous le nom de la zone) et retrouve la carte photographiée à ces
+   coordonnées. Si elles sont illisibles, il compare l'écran à vos photos ;
 2. il prend les points des céréales cochées, de proche en proche ;
-3. pour chacun, il survole le point et clique s'il lit « Faucher », jamais
-   s'il lit « Épuisé » ;
+3. pour chacun, il survole le point et clique **uniquement s'il lit
+   « Faucher »**. « Épuisé » ou pas d'infobulle : pas de clic ;
 4. il attend la fin de la file, puis fait un 2ᵉ passage pour les points encore
    « Faucher » ;
 5. il joue le son de fin de carte.
 
-Le clic tombe sur votre point à ± 2 points d'écran près
-(`circuit.jitter_point`, 0 = pile au même pixel). Avec
-`circuit.verifier_infobulle: false`, il clique directement, sans lire
-l'infobulle. Une carte inconnue (ou trop différente de ses photos) arrête le
-bot, avec un message.
+Le clic tombe **pile** sur votre point (`circuit.jitter_point: 0` ; 1 ou 2
+pour varier légèrement). Si les infobulles ne peuvent pas être lues (pas
+d'image dans `assets/infobulles/faucher/`), le bot s'arrête au lieu de
+cliquer. Une carte inconnue arrête aussi le bot, avec un message.
+
+**Lecture des coordonnées.** Installez l'un de ces deux moteurs (sinon, le bot
+reconnaît les cartes uniquement par l'image) :
+- `brew install tesseract` puis `pip install pytesseract` (testé) ;
+- ou `pip install pyobjc-framework-Vision` (Apple Vision, intégré à macOS).
+
+En mode Photos, le terminal affiche les coordonnées lues, par exemple
+`carte_002 [-28,-37]`. Les cartes photographiées avant reçoivent leurs
+coordonnées automatiquement au premier passage.
 
 | Touche (config.yaml > raccourcis) | Action |
 |---|---|

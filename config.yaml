@@ -30,15 +30,15 @@ recolte:
 # --- Circuit (méthode points) -------------------------------------------------
 circuit:
   dossier: "circuit"            # photos des cartes + points de clic (circuit/cartes.json)
-  # Lire l'infobulle avant chaque clic : clic seulement si « Faucher », jamais
-  # sur « Épuisé ». false = clic direct sur chaque point, sans vérification.
+  # Lire l'infobulle avant chaque clic : clic UNIQUEMENT si « Faucher » est lu ;
+  # jamais sur « Épuisé », jamais sans infobulle lisible. (false = clic direct
+  # sans aucune vérification : déconseillé.)
   verifier_infobulle: true
-  cliquer_si_illisible: false   # true : cliquer aussi quand aucune infobulle n'est lue
   # Passages : après la file, un 2e passage reclique les points encore « Faucher ».
   passes: 2
-  # Le bot clique sur chaque point à ± jitter_point près (points écran ;
-  # 0 = pile au même pixel).
-  jitter_point: 2
+  # Le bot clique pile sur chaque point (jitter_point: 0). Mettre 1 ou 2 pour
+  # varier légèrement le point de clic (en points écran).
+  jitter_point: 0
   rayon_point: 8                # Maj+E retire un point à moins de N points du curseur
   # Reconnaissance de la carte (ressemblance avec vos photos, 0..1).
   seuil_reconnaissance: 0.80
@@ -47,6 +47,13 @@ circuit:
   max_photos: 4
   tolerance: 14
   taille_signature: 192
+  # Coordonnées de la carte (ex. « -28, -37 »), sous le nom de la zone en haut à
+  # gauche : clé principale pour retrouver la carte (image en secours).
+  # Nécessite Tesseract (brew install tesseract + pip install pytesseract)
+  # ou Apple Vision (pip install pyobjc-framework-Vision).
+  coordonnees:
+    actif: true
+    zone: {left: 0, top: 50, width: 200, height: 22}   # points écran
 
 # --- Écran / capture ---------------------------------------------------------
 ecran:
@@ -167,9 +174,9 @@ infobulle:
   # L'infobulle est guettée : lecture toutes les `intervalle_lecture` s après
   # `delai_min`, jusqu'à `delai_max`. Avec apprendre_delai, l'attente max est
   # ramenée au délai réellement mesuré sur votre Mac (+ marge).
-  delai_min: 0.06
+  delai_min: 0.03
   delai_max: 0.6
-  intervalle_lecture: 0.04
+  intervalle_lecture: 0.02
   apprendre_delai: true
   essais: 1                     # nouveaux survols si l'infobulle reste illisible
   # Zone de recherche autour du curseur (points, relatif au curseur).
@@ -199,29 +206,30 @@ file_attente:
 # --- Souris humaine ----------------------------------------------------------
 souris:
   vitesse: 1.0                  # multiplicateur global (>1 = plus rapide)
-  duree_min: 0.09               # durée min d'un déplacement (s)
-  duree_max: 0.45               # durée max d'un déplacement (s)
-  duree_par_1000px: 0.22        # durée additionnelle par 1000 points
+  duree_min: 0.05               # durée min d'un déplacement (s)
+  duree_max: 0.25               # durée max d'un déplacement (s)
+  duree_par_1000px: 0.12        # durée additionnelle par 1000 points
   courbure: 0.22                # amplitude des points de contrôle de Bézier
-  bruit: 1.2                    # bruit (points) ajouté le long du trajet
-  proba_depassement: 0.18       # probabilité de dépasser légèrement la cible
+  bruit: 0.8                    # bruit (points) ajouté le long du trajet (nul à l'arrivée)
+  proba_depassement: 0.05       # probabilité de dépasser légèrement la cible (puis retour exact)
   depassement_max: 9            # amplitude max du dépassement (points)
   pas_par_seconde: 120          # fréquence des positions intermédiaires
+  rattrapage_macos: 0.002       # pause de pyautogui après chaque événement (10 ms par défaut)
   # Point de clic : décalage aléatoire dans la boîte de la ressource,
   # en fraction de sa demi-taille (jamais le centre exact).
   zone_clic: 0.45
-  appui_min: 0.04               # durée d'appui du clic (s)
-  appui_max: 0.10
+  appui_min: 0.03               # durée d'appui du clic (s)
+  appui_max: 0.07
 
 # --- Délais entre actions ----------------------------------------------------
 # Distribution log-normale : médiane + dispersion (sigma), bornée.
 delais:
   # Valeurs rapides mais toujours variables (côté humain). Pour ralentir,
   # augmentez les médianes.
-  entre_clics: {mediane: 0.11, sigma: 0.5, min: 0.04, max: 0.6}
-  apres_survol: {mediane: 0.04, sigma: 0.5, min: 0.01, max: 0.2}
+  entre_clics: {mediane: 0.05, sigma: 0.5, min: 0.02, max: 0.3}
+  apres_survol: {mediane: 0.015, sigma: 0.5, min: 0.005, max: 0.08}
   # Petites pauses irrégulières (probabilité par action).
-  proba_micro_pause: 0.03
+  proba_micro_pause: 0.01
   micro_pause: {mediane: 0.6, sigma: 0.5, min: 0.25, max: 1.8}
 
 # --- Mémoire des cartes : python main.py cartes --------------------------------

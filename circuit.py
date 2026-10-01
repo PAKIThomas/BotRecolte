@@ -33,6 +33,7 @@ import cv2
 import numpy as np
 
 import vision
+from coordonnees import LecteurCoordonnees
 
 log = logging.getLogger("circuit")
 RACINE = Path(__file__).parent
@@ -49,6 +50,8 @@ class Circuit:
         self._verrou = threading.RLock()
         self.cartes: dict[str, dict] = {}
         self._signatures: dict[str, list[np.ndarray]] = {}
+        self.lecteur = LecteurCoordonnees(cfg)
+        self.dernieres_coords: str | None = None
         self._charger()
 
     # ------------------------------------------------------------ fichiers
@@ -115,33 +118,64 @@ class Circuit:
                 scores.append((max(self._similarite(sig, s) for s in sigs), ident))
         return sorted(scores, reverse=True)
 
+    def _par_image(self, scores: list[tuple[float, str]], parmi: set[str] | None = None
+                   ) -> tuple[str | None, float, str]:
+        """Choix par comparaison d'image (avec seuil et refus si ambigu)."""
+        if parmi is not None:
+            scores = [(s, i) for s, i in scores if i in parmi]
+        if not scores:
+            return None, 0.0, "aucune carte photographiée"
+        (s1, id1), s2 = scores[0], (scores[1][0] if len(scores) > 1 else 0.0)
+        seuil = self.c.get("seuil_reconnaissance", 0.80)
+        if s1 < seuil:
+            return None, s1, f"ressemblance max {100 * s1:.0f} % avec {self.nom(id1)} (seuil {100 * seuil:.0f} %)"
+        if s1 - s2 < self.c.get("marge_ambiguite", 0.04):
+            return None, s1, (f"ambiguïté entre {self.nom(id1)} ({100 * s1:.0f} %) et "
+                              f"{self.nom(scores[1][1])} ({100 * s2:.0f} %)")
+        return id1, s1, "image"
+
     def reconnaitre(self, frame: vision.Frame) -> tuple[str | None, float, str]:
-        """(identifiant ou None, ressemblance, explication)."""
+        """(identifiant ou None, ressemblance d'image, comment / pourquoi).
+
+        1. Coordonnées lues (ex. « -28,-37 ») : la carte photographiée à ces
+           coordonnées. Plusieurs cartes aux mêmes coordonnées : la plus
+           ressemblante.
+        2. Coordonnées illisibles : comparaison d'image avec vos photos.
+        Une carte photographiée avant la lecture des coordonnées les reçoit
+        automatiquement la première fois qu'elle est reconnue par l'image."""
         with self._verrou:
+            coords = self.lecteur.lire(frame)
+            self.dernieres_coords = coords
             scores = self.comparer(frame)
-            if not scores:
-                return None, 0.0, "aucune carte photographiée"
-            (s1, id1), s2 = scores[0], (scores[1][0] if len(scores) > 1 else 0.0)
-            seuil = self.c.get("seuil_reconnaissance", 0.80)
-            if s1 < seuil:
-                return None, s1, f"ressemblance max {100 * s1:.0f} % avec {self.nom(id1)} (seuil {100 * seuil:.0f} %)"
-            if s1 - s2 < self.c.get("marge_ambiguite", 0.04):
-                ident2 = scores[1][1]
-                return None, s1, (f"ambiguïté entre {self.nom(id1)} ({100 * s1:.0f} %) et "
-                                  f"{self.nom(ident2)} ({100 * s2:.0f} %)")
-            return id1, s1, ""
+            score_de = {i: s for s, i in scores}
+            if coords:
+                memes = [i for i, c in self.cartes.items() if c.get("coords") == coords]
+                if memes:
+                    ident = max(memes, key=lambda i: score_de.get(i, 0.0))
+                    return ident, score_de.get(ident, 0.0), f"coordonnées {coords}"
+                sans = {i for i, c in self.cartes.items() if not c.get("coords")}
+                ident, score, pourquoi = self._par_image(scores, sans)
+                if ident:
+                    self.cartes[ident]["coords"] = coords
+                    self.sauver()
+                    return ident, score, f"image (coordonnées {coords} mémorisées)"
+                return None, scores[0][0] if scores else 0.0, f"aucune carte photographiée en {coords}"
+            ident, score, pourquoi = self._par_image(scores)
+            return ident, score, ("image (coordonnées illisibles)" if ident else
+                                  pourquoi + " ; coordonnées illisibles")
 
     # ---------------------------------------------------------------- photos
 
     def photographier(self, frame: vision.Frame) -> tuple[str, bool, float]:
-        """Enregistre la carte affichée. Carte déjà connue : la photo est
-        ajoutée comme variante si elle est un peu différente (champs récoltés…).
+        """Enregistre la carte affichée, avec ses coordonnées si elles sont
+        lisibles. Carte déjà connue : la photo est ajoutée comme variante si
+        elle est un peu différente (champs récoltés…).
         Retourne (identifiant, nouvelle carte ?, ressemblance)."""
         with self._verrou:
             img = self._photo_points(frame)
-            scores = self.comparer(frame)
-            if scores and scores[0][0] >= self.c.get("seuil_reconnaissance", 0.80):
-                score, ident = scores[0]
+            ident, score, _ = self.reconnaitre(frame)
+            coords = self.dernieres_coords
+            if ident:
                 if (score < self.c.get("seuil_variante", 0.93)
                         and len(self.cartes[ident]["photos"]) < self.c.get("max_photos", 4)):
                     self._ajouter_photo(ident, img)
@@ -149,12 +183,13 @@ class Circuit:
                 return ident, False, score
             n = 1 + max((int(i.split("_")[-1]) for i in self.cartes if i.split("_")[-1].isdigit()), default=0)
             ident = f"carte_{n:03d}"
-            self.cartes[ident] = {"nom": "", "creee": datetime.now().isoformat(timespec="seconds"),
+            self.cartes[ident] = {"nom": "", "coords": coords or "",
+                                  "creee": datetime.now().isoformat(timespec="seconds"),
                                   "photos": [], "zones": []}
             self._signatures[ident] = []
             self._ajouter_photo(ident, img)
             self.sauver()
-            return ident, True, scores[0][0] if scores else 0.0
+            return ident, True, score
 
     def _ajouter_photo(self, ident: str, img: np.ndarray):
         nom = f"{ident}_{len(self.cartes[ident]['photos'])}.png"
@@ -198,8 +233,9 @@ class Circuit:
     def nom(self, ident: str | None) -> str:
         if not ident:
             return "?"
-        n = self.cartes.get(ident, {}).get("nom")
-        return f"{ident} « {n} »" if n else ident
+        c = self.cartes.get(ident, {})
+        texte = ident + (f" [{c['coords']}]" if c.get("coords") else "")
+        return texte + (f" « {c['nom']} »" if c.get("nom") else "")
 
     def renommer(self, ident: str, nom: str) -> bool:
         if ident not in self.cartes:
@@ -229,8 +265,7 @@ class Circuit:
         lignes = []
         for ident, c in sorted(self.cartes.items()):
             zs = c.get("zones", [])
-            pts = sum(1 for z in zs if est_point(z))
-            lignes.append(f"{ident}  {c.get('nom') or '':<22} {pts:3d} point(s) {len(zs) - pts:3d} zone(s)  "
+            lignes.append(f"{ident}  [{c.get('coords') or '?':>9}]  {c.get('nom') or '':<22} {len(zs):3d} point(s)  "
                           f"{len(c.get('photos', []))} photo(s)  (créée {c.get('creee', '?')[:10]})")
         return lignes
 

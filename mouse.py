@@ -88,6 +88,9 @@ class SourisHumaine:
         self.pg = pyautogui
         self.pg.PAUSE = 0                       # on gère nous-mêmes les délais
         self.pg.MINIMUM_DURATION = 0
+        # Sur macOS, pyautogui dort 10 ms après CHAQUE événement souris : avec
+        # des dizaines de positions par trajet, cela ralentit beaucoup.
+        self.pg.DARWIN_CATCH_UP_TIME = float(cfg["souris"].get("rattrapage_macos", 0.002))
         self.pg.FAILSAFE = cfg["securite"].get("failsafe_coin_ecran", True)
         self.cfg = cfg["souris"]
         self.delais = cfg["delais"]
@@ -121,7 +124,8 @@ class SourisHumaine:
         for (px, py) in pts:
             self.controle()                     # pause / arrêt d'urgence
             t0 = time.perf_counter()
-            self.pg.moveTo(px, py, _pause=False)
+            # Arrondi (pyautogui tronque) : le clic tombe au point le plus proche.
+            self.pg.moveTo(round(px), round(py), _pause=False)
             reste = pas - (time.perf_counter() - t0)
             if reste > 0:
                 time.sleep(reste)

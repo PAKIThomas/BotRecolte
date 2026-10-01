@@ -11,4 +11,5 @@ ultralytics>=8.3
 
 # Optionnels
 # pyobjc-framework-Cocoa>=10.0   # détection plus rapide de l'app au premier plan (AppKit)
-# pytesseract>=0.3.10            # OCR de secours des infobulles (+ brew install tesseract tesseract-lang)
+# pytesseract>=0.3.10            # lecture des coordonnées de la carte (+ brew install tesseract)
+# pyobjc-framework-Vision>=10.0  # ou : lecture des coordonnées par Apple Vision (sans brew)

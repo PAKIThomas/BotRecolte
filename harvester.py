@@ -343,6 +343,9 @@ class Recolteur:
         avant = {i: len(c.get("photos", [])) for i, c in self.circuit.cartes.items()}
         ident, nouvelle, score = self.circuit.photographier(frame)
         nom = self.circuit.nom(ident)
+        coords = self.circuit.dernieres_coords
+        if self.circuit.lecteur.disponible and not coords:
+            log.warning("   Coordonnées illisibles sur cette capture : la carte sera reconnue par l'image.")
         if nouvelle:
             log.info("📸 Nouvelle carte photographiée : %s (%d carte(s) au total). "
                      "Placez ses points de clic avec : python main.py points", nom, len(self.circuit.cartes))
@@ -441,14 +444,19 @@ class Recolteur:
         self.carte_id = ident
         indexees = [(i, z) for i, z in enumerate(self.circuit.zones(ident))
                     if not z.get("cereale") or z["cereale"] in self.cereales]
-        log.info("🗺  Carte reconnue : %s (ressemblance %.0f %%) — %d point(s) de clic.",
-                 self.circuit.nom(ident), 100 * score, len(indexees))
+        log.info("🗺  Carte reconnue : %s (par %s, ressemblance %.0f %%) — %d point(s) de clic.",
+                 self.circuit.nom(ident), pourquoi, 100 * score, len(indexees))
         if not indexees:
             raise ArretBot(f"aucun point de clic (pour les céréales choisies) sur {self.circuit.nom(ident)} : "
                            "placez-les avec python main.py points")
-        verifier = cfg_c.get("verifier_infobulle", True) and self.infobulle.operationnel
-        if cfg_c.get("verifier_infobulle", True) and not self.infobulle.operationnel:
-            log.warning("Pas d'image « Faucher » ni d'OCR : clics sans vérification de l'infobulle.")
+        # Règle : clic UNIQUEMENT si l'infobulle « Faucher » est lue ; jamais
+        # sur « Épuisé », jamais sans infobulle lisible.
+        verifier = cfg_c.get("verifier_infobulle", True)
+        if verifier and not self.infobulle.operationnel:
+            raise ArretBot("impossible de lire les infobulles (aucune image dans assets/infobulles/faucher/) : "
+                           "par sécurité, aucun clic")
+        if not verifier:
+            log.warning("⚠ circuit.verifier_infobulle: false — clics SANS vérifier « Faucher ».")
 
         if test:
             self._test_zones(capture, souris, frame, ident, indexees, verifier)
@@ -477,7 +485,7 @@ class Recolteur:
                         illisibles = 0
                         log.info("  %s → Épuisé ✘", etiquette)
                         continue
-                    if verdict == L.INCONNU and not cfg_c.get("cliquer_si_illisible", False):
+                    if verdict != L.FAUCHER:
                         illisibles += 1
                         log.info("  %s → pas d'infobulle, pas de clic (%s)", etiquette, detail)
                         if illisibles >= cfg_s["max_introuvables_consecutifs"]:
