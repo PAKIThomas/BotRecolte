@@ -14,13 +14,16 @@ chat, et indépendante de la résolution de capture (Retina ou non).
 Fichiers :
     circuit/cartes.json            noms, photos et zones de chaque carte
     circuit/photos/<id>_<n>.png    photos (1 pixel = 1 point écran)
-Les zones sont en POINTS écran : {x, y (centre), w, h, cereale}.
+Deux sortes de cibles, en POINTS écran :
+    point : {"type": "point", x, y, cereale}  -> clic exactement là (± jitter_point)
+    zone  : {"type": "zone", x, y (centre), w, h, cereale} -> clic à un point aléatoire dedans
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import random
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -173,20 +176,21 @@ class Circuit:
             self.sauver()
 
     def ajouter_zone(self, ident: str, px: float, py: float, cereale: str = ""):
-        taille = self.c.get("taille_zone", {"largeur": 24, "hauteur": 24})
+        """Ajoute un POINT de clic (Maj+O)."""
         with self._verrou:
-            self.cartes[ident]["zones"].append({"x": round(px, 1), "y": round(py, 1), "w": taille["largeur"],
-                                                "h": taille["hauteur"], "cereale": cereale})
+            self.cartes[ident]["zones"].append(nouveau_point(px, py, cereale))
             self.sauver()
 
     def retirer_zone(self, ident: str, px: float, py: float) -> bool:
+        """Retire le point ou la zone sous (px, py) (Maj+E)."""
         with self._verrou:
-            for z in self.cartes.get(ident, {}).get("zones", []):
-                if abs(px - z["x"]) <= z["w"] / 2 + 4 and abs(py - z["y"]) <= z["h"] / 2 + 4:
-                    self.cartes[ident]["zones"].remove(z)
-                    self.sauver()
-                    return True
-            return False
+            zs = self.cartes.get(ident, {}).get("zones", [])
+            i = cible_sous(zs, px, py, self.c.get("rayon_point", 8))
+            if i is None:
+                return False
+            del zs[i]
+            self.sauver()
+            return True
 
     # ---------------------------------------------------------------- infos
 
@@ -217,10 +221,52 @@ class Circuit:
     def resume(self) -> str:
         sans = sum(1 for c in self.cartes.values() if not c.get("zones"))
         n = sum(len(c.get("zones", [])) for c in self.cartes.values())
-        return (f"{len(self.cartes)} carte(s) photographiée(s), {n} zone(s) de clic"
-                + (f", {sans} carte(s) SANS zone" if sans else ""))
+        return (f"{len(self.cartes)} carte(s) photographiée(s), {n} point(s)/zone(s) de clic"
+                + (f", {sans} carte(s) SANS point de clic" if sans else ""))
 
     def lister(self) -> list[str]:
-        return [f"{ident}  {c.get('nom') or '':<22} {len(c.get('zones', [])):3d} zone(s)  "
-                f"{len(c.get('photos', []))} photo(s)  (créée {c.get('creee', '?')[:10]})"
-                for ident, c in sorted(self.cartes.items())]
+        lignes = []
+        for ident, c in sorted(self.cartes.items()):
+            zs = c.get("zones", [])
+            pts = sum(1 for z in zs if est_point(z))
+            lignes.append(f"{ident}  {c.get('nom') or '':<22} {pts:3d} point(s) {len(zs) - pts:3d} zone(s)  "
+                          f"{len(c.get('photos', []))} photo(s)  (créée {c.get('creee', '?')[:10]})")
+        return lignes
+
+
+# =============================================================================
+#  Points et zones
+# =============================================================================
+
+def nouveau_point(px: float, py: float, cereale: str = "") -> dict:
+    return {"type": "point", "x": round(px, 1), "y": round(py, 1), "w": 0, "h": 0, "cereale": cereale}
+
+
+def est_point(z: dict) -> bool:
+    return z.get("type") == "point" or (z.get("w", 0) <= 0 and z.get("h", 0) <= 0)
+
+
+def cible_sous(zones: list[dict], px: float, py: float, rayon_point: float = 8) -> int | None:
+    """Index du point (dans le rayon) ou de la zone sous (px, py), le plus proche."""
+    meilleur, dist = None, None
+    for i, z in enumerate(zones):
+        d = (px - z["x"]) ** 2 + (py - z["y"]) ** 2
+        dedans = (d <= rayon_point ** 2 if est_point(z)
+                  else abs(px - z["x"]) <= z["w"] / 2 and abs(py - z["y"]) <= z["h"] / 2)
+        if dedans and (dist is None or d < dist):
+            meilleur, dist = i, d
+    return meilleur
+
+
+def point_de_clic(z: dict, jitter_point: float = 2.0, part_zone: float = 0.7) -> tuple[float, float]:
+    """Où cliquer : sur un point, exactement là à ± jitter_point près ; dans
+    une zone, à un point aléatoire (plutôt vers le centre, jamais pile au centre)."""
+    if est_point(z):
+        j = max(0.0, float(jitter_point))
+        return z["x"] + random.uniform(-j, j), z["y"] + random.uniform(-j, j)
+    for _ in range(50):
+        ox = max(-1.0, min(1.0, random.gauss(0, 0.45))) * part_zone * z["w"] / 2
+        oy = max(-1.0, min(1.0, random.gauss(0, 0.45))) * part_zone * z["h"] / 2
+        if abs(ox) >= 1 or abs(oy) >= 1:
+            return z["x"] + ox, z["y"] + oy
+    return z["x"] + 1.5, z["y"] + 1.5

@@ -1,16 +1,14 @@
 """Éditeur des zones de clic : `python main.py zones`.
 
-Affiche la photo de chaque carte de votre circuit. Vous y dessinez les zones
-où le bot doit cliquer : une zone = un clic (à un point aléatoire dedans).
-Tout est enregistré automatiquement.
+Affiche la photo de chaque carte de votre circuit. Vous y indiquez où le
+bot doit cliquer. Tout est enregistré automatiquement.
 
 Commandes :
-  clic gauche        zone à cet endroit (taille par défaut)
-  glisser            zone rectangulaire sur mesure
-  clic droit         supprime la zone sous le curseur
-  1-9                choisit la céréale des nouvelles zones (voir la légende)
-  C                  donne la céréale choisie à la zone sous le curseur
-  [ / ]              taille par défaut plus petite / plus grande
+  clic gauche        POINT de clic : le bot cliquera exactement là (± 2 points)
+  glisser            zone : le bot cliquera à un point aléatoire dedans
+  clic droit         supprime le point ou la zone sous le curseur
+  1-9                choisit la céréale des nouveaux points (voir la légende)
+  C                  donne la céréale choisie au point sous le curseur
   Z                  annule la dernière modification
   Tab                photo suivante de la même carte (s'il y en a plusieurs)
   R                  renomme la carte
@@ -27,7 +25,7 @@ import logging
 
 import cv2
 
-from circuit import Circuit
+from circuit import Circuit, cible_sous, est_point, nouveau_point
 
 log = logging.getLogger("zones")
 
@@ -55,8 +53,6 @@ class EditeurZones:
                     break
         self.courante = 0
         self.photo_n = 0
-        tz = cfg.get("circuit", {}).get("taille_zone", {"largeur": 24, "hauteur": 24})
-        self.taille = [float(tz["largeur"]), float(tz["hauteur"])]
         self.zones: list[dict] = []
         self.historique: list[list[dict]] = []
         self._debut = None
@@ -158,12 +154,22 @@ class EditeurZones:
         k = self.e * self.f
         for i, z in enumerate(self.zones):
             x, y = self._vers_canvas(z["x"], z["y"])
-            w, h = z["w"] * k / 2, z["h"] * k / 2
             coul = self._couleur(z.get("cereale", ""))
-            c.create_rectangle(x - w, y - h, x + w, y + h, outline=coul, width=2, fill=coul,
-                               stipple="gray25", tags=("zone",))
-            c.create_text(x, y - h - 1, anchor="s", fill=coul, font=("Helvetica", 10, "bold"),
-                          text=str(i + 1), tags=("zone",))
+            if est_point(z):
+                # Cible : cercle + croix, le centre est le point de clic exact.
+                r = 7
+                c.create_oval(x - r, y - r, x + r, y + r, outline="#000", width=4, tags=("zone",))
+                c.create_oval(x - r, y - r, x + r, y + r, outline=coul, width=2, tags=("zone",))
+                c.create_line(x - r - 4, y, x + r + 4, y, fill=coul, width=1, tags=("zone",))
+                c.create_line(x, y - r - 4, x, y + r + 4, fill=coul, width=1, tags=("zone",))
+                c.create_text(x + r + 2, y - r - 2, anchor="sw", fill=coul, font=("Helvetica", 10, "bold"),
+                              text=str(i + 1), tags=("zone",))
+            else:
+                w, h = z["w"] * k / 2, z["h"] * k / 2
+                c.create_rectangle(x - w, y - h, x + w, y + h, outline=coul, width=2, fill=coul,
+                                   stipple="gray25", tags=("zone",))
+                c.create_text(x, y - h - 1, anchor="s", fill=coul, font=("Helvetica", 10, "bold"),
+                              text=str(i + 1), tags=("zone",))
         self._maj_info()
 
     def _maj_info(self):
@@ -175,20 +181,18 @@ class EditeurZones:
         nom = self.cfg["cereales"].get(self.cereales[self.courante], {}).get("nom", "?") if self.cereales else "?"
         self.info.config(text=(
             f"{self.circuit.nom(ident)}  —  carte {self.index + 1}/{len(self.ids)}  —  photo {self.photo_n + 1}/{nb}"
-            f"  —  {len(self.zones)} zone(s)  —  cartes sans zone : {sans}\n"
-            f"Céréale : {nom}  |  clic = zone · glisser = grande zone · clic droit = supprimer · C = céréale · "
-            f"[ ] = taille · Z = annuler · Tab = autre photo · R = renommer · →/← = cartes · Suppr = supprimer "
-            f"la carte · Échap = quitter  (enregistrement automatique)"))
+            f"  —  {sum(1 for z in self.zones if est_point(z))} point(s), "
+            f"{sum(1 for z in self.zones if not est_point(z))} zone(s)  —  cartes sans clic : {sans}\n"
+            f"Céréale : {nom}  |  clic = POINT de clic exact · glisser = zone · clic droit = supprimer · "
+            f"C = céréale · Z = annuler · Tab = autre photo · R = renommer · →/← = cartes · "
+            f"Suppr = supprimer la carte · Échap = quitter  (enregistrement automatique)"))
 
     # ---------------------------------------------------------------- souris
 
     def _zone_sous(self, cx, cy) -> int | None:
         px, py = self._vers_points(cx, cy)
-        for i in range(len(self.zones) - 1, -1, -1):
-            z = self.zones[i]
-            if abs(px - z["x"]) <= z["w"] / 2 and abs(py - z["y"]) <= z["h"] / 2:
-                return i
-        return None
+        # Rayon de sélection d'un point : ~9 pixels à l'écran.
+        return cible_sous(self.zones, px, py, rayon_point=9 / (self.e * self.f))
 
     def _enregistrer(self):
         self.circuit.definir_zones(self.ids[self.index], self.zones)
@@ -225,12 +229,10 @@ class EditeurZones:
             bx, by = self._vers_points(max(x0, e.x), max(y0, e.y))
             if bx - ax < 4 or by - ay < 4:
                 return
-            zone = {"x": round((ax + bx) / 2, 1), "y": round((ay + by) / 2, 1),
+            zone = {"type": "zone", "x": round((ax + bx) / 2, 1), "y": round((ay + by) / 2, 1),
                     "w": round(bx - ax, 1), "h": round(by - ay, 1), "cereale": cereale}
         else:
-            px, py = self._vers_points(e.x, e.y)
-            zone = {"x": round(px, 1), "y": round(py, 1), "w": round(self.taille[0], 1),
-                    "h": round(self.taille[1], 1), "cereale": cereale}
+            zone = nouveau_point(*self._vers_points(e.x, e.y), cereale)
         self._memoriser()
         self.zones.append(zone)
         self._enregistrer()
@@ -257,10 +259,6 @@ class EditeurZones:
                 self._memoriser()
                 self.zones[i]["cereale"] = self.cereales[self.courante]
                 self._enregistrer()
-        elif k in ("[", "]"):
-            f = 0.85 if k == "[" else 1.15
-            self.taille = [max(6.0, self.taille[0] * f), max(6.0, self.taille[1] * f)]
-            self.info.config(text=f"Taille des nouvelles zones : {self.taille[0]:.0f} × {self.taille[1]:.0f} points")
         elif k == "r":
             self.renommer()
 

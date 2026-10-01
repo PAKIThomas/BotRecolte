@@ -35,9 +35,11 @@ circuit:
   cliquer_si_illisible: false   # true : cliquer aussi quand aucune infobulle n'est lue
   # Passages : après la file, un 2e passage reclique les zones encore « Faucher ».
   passes: 2
-  # Zone créée par un simple clic dans l'éditeur (points) ; [ et ] pour ajuster.
-  taille_zone: {largeur: 24, hauteur: 24}
-  zone_clic: 0.7                # part de la zone utilisée pour le point de clic aléatoire
+  # Point de clic (clic simple dans l'éditeur, ou Maj+O) : le bot clique
+  # exactement là, à ± jitter_point près (points écran ; 0 = pile au même pixel).
+  jitter_point: 2
+  rayon_point: 8                # Maj+E retire un point à moins de N points du curseur
+  zone_clic: 0.7                # zone (glisser) : part utilisée pour le point aléatoire
   # Reconnaissance de la carte (ressemblance avec vos photos, 0..1).
   seuil_reconnaissance: 0.80
   marge_ambiguite: 0.04         # refus si deux cartes se ressemblent autant

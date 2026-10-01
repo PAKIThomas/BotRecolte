@@ -45,18 +45,19 @@ python main.py      # fenêtre : céréales + mode (Photos, Zones, Test, Récolt
 sur **N** : la carte est photographiée (`circuit/photos/`). Une carte déjà
 photographiée est reconnue et n'est pas dupliquée.
 
-**2. Zones.** Mode « Zones » (ou `python main.py zones --cereales ble,orge`).
-Chaque photo s'affiche : dessinez les zones où cliquer. Une zone = un clic,
-à un point aléatoire à l'intérieur. L'enregistrement est automatique.
+**2. Points de clic.** Mode « Zones » (ou `python main.py zones --cereales ble,orge`).
+Chaque photo s'affiche : **faites un clic gauche sur chaque céréale**, à
+l'endroit exact où le bot devra cliquer. Chaque clic pose une cible numérotée.
+Le bot cliquera exactement là, à ± 2 points près (`circuit.jitter_point`, 0 =
+pile au même pixel). L'enregistrement est automatique.
 
 | Dans l'éditeur | Action |
 |---|---|
-| clic gauche | zone à cet endroit (taille par défaut) |
-| glisser | zone rectangulaire sur mesure |
-| clic droit | supprimer la zone |
-| 1-9 | céréale des nouvelles zones |
-| C | donner la céréale choisie à la zone sous le curseur |
-| [ / ] | taille par défaut plus petite / plus grande |
+| clic gauche | **point de clic** exact sur la céréale |
+| glisser | zone : clic à un point aléatoire dedans (facultatif) |
+| clic droit | supprimer le point ou la zone |
+| 1-9 | céréale des nouveaux points |
+| C | donner la céréale choisie au point sous le curseur |
 | Z | annuler |
 | Tab | autre photo de la même carte |
 | R | renommer la carte |
@@ -64,32 +65,32 @@ Chaque photo s'affiche : dessinez les zones où cliquer. Une zone = un clic,
 | Suppr | supprimer la carte |
 | Échap | quitter |
 
-**Test (conseillé).** Mode « Test » : N reconnaît la carte, dessine vos zones
-sur la capture actuelle (`debug/<date>/zones.png`) et, avec le survol, lit
-l'infobulle de chaque zone, **sans cliquer** :
+**Test (conseillé).** Mode « Test » : N reconnaît la carte, dessine vos
+points sur la capture actuelle (`debug/<date>/zones.png`) et, avec le survol,
+lit l'infobulle de chaque point, **sans cliquer** :
 - vert : cliquerait ;
 - rouge : épuisé ;
-- bleu : pas d'infobulle, la zone est sans doute mal placée.
+- bleu : pas d'infobulle, le point est sans doute mal placé.
 
 **3. Récolte.** Mode « Récolte ». Sur chaque carte, appuyez sur **N** :
 1. le bot reconnaît la carte en la comparant à vos photos ;
-2. il survole chaque zone, de proche en proche ;
+2. il survole chacun de vos points, de proche en proche ;
 3. il clique si l'infobulle affiche « Faucher », jamais si elle affiche « Épuisé » ;
-4. il attend la fin de la file, puis fait un 2ᵉ passage pour les zones encore
+4. il attend la fin de la file, puis fait un 2ᵉ passage pour les points encore
    « Faucher » ;
 5. il joue le son de fin de carte.
 
 Carte inconnue (ou trop différente de ses photos) : le bot s'arrête et vous
 le dit. `circuit.verifier_infobulle: false` supprime la lecture de
-l'infobulle : clic direct dans chaque zone.
+l'infobulle : clic direct sur chaque point.
 
 | Touche (config.yaml > raccourcis) | Action |
 |---|---|
 | **N** | photo / test / récolte de la carte, selon le mode |
 | **P** | pause / reprise |
 | **W** | arrêt d'urgence immédiat |
-| **Maj+O** | ajoute une zone sous le curseur, sur la carte affichée |
-| **Maj+E** | retire la zone sous le curseur |
+| **Maj+O** | ajoute un point de clic sous le curseur, sur la carte affichée |
+| **Maj+E** | retire le point sous le curseur |
 | Ctrl+C (terminal) | quitter |
 
 ```bash

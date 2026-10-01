@@ -36,7 +36,7 @@ import cv2
 
 import vision
 from apprentissage import Collecteur
-from circuit import Circuit
+from circuit import Circuit, est_point, point_de_clic
 from ia import DetecteurIA, EnregistreurCartes
 from memoire import MemoireCartes
 from mouse import ArretDemande, SourisHumaine
@@ -367,12 +367,12 @@ class Recolteur:
             if type_ == "mure":
                 cereale = self.cereales[0] if len(self.cereales) == 1 else ""
                 self.circuit.ajouter_zone(ident, px, py, cereale)
-                log.info("➕ Zone ajoutée sur %s en (%.0f, %.0f) — %d zone(s).", self.circuit.nom(ident), px, py,
-                         len(self.circuit.zones(ident)))
+                log.info("➕ Point de clic ajouté sur %s en (%.0f, %.0f) — %d cible(s).", self.circuit.nom(ident),
+                         px, py, len(self.circuit.zones(ident)))
             elif self.circuit.retirer_zone(ident, px, py):
-                log.info("➖ Zone retirée sur %s en (%.0f, %.0f).", self.circuit.nom(ident), px, py)
+                log.info("➖ Point/zone retiré(e) sur %s en (%.0f, %.0f).", self.circuit.nom(ident), px, py)
             else:
-                log.info("Aucune zone sous le curseur en (%.0f, %.0f).", px, py)
+                log.info("Aucun point ni zone sous le curseur en (%.0f, %.0f).", px, py)
             self.sons.jouer("info")
         except Exception:
             log.exception("Modification de zone impossible.")
@@ -382,11 +382,10 @@ class Recolteur:
     def verdict_zone(self, capture: vision.Capture, souris: SourisHumaine, z: dict) -> tuple[str, str]:
         """Survole un point aléatoire de la zone et guette l'infobulle."""
         cfg_ib = self.cfg["infobulle"]
-        frac = self.cfg.get("circuit", {}).get("zone_clic", 0.7)
         L = vision.LecteurInfobulle
         verdict, detail = L.INCONNU, ""
         for essai in range(1 + cfg_ib.get("essais", 1)):
-            px, py = souris.point_dans_boite(z["x"], z["y"], z["w"], z["h"], frac)
+            px, py = self.point_cible(z)
             souris.deplacer(px, py)
             self.dernier_point = (px, py)
             debut = time.monotonic()
@@ -401,6 +400,10 @@ class Recolteur:
                 self._noter_delai(time.monotonic() - debut)
                 break
         return verdict, detail
+
+    def point_cible(self, z: dict) -> tuple[float, float]:
+        cfg_c = self.cfg.get("circuit", {})
+        return point_de_clic(z, cfg_c.get("jitter_point", 2), cfg_c.get("zone_clic", 0.7))
 
     @staticmethod
     def ordre_zones(zones: list[tuple[int, dict]], depart: tuple[float, float]) -> list[tuple[int, dict]]:
@@ -437,11 +440,11 @@ class Recolteur:
         self.carte_id = ident
         indexees = [(i, z) for i, z in enumerate(self.circuit.zones(ident))
                     if not z.get("cereale") or z["cereale"] in self.cereales]
-        log.info("🗺  Carte reconnue : %s (ressemblance %.0f %%) — %d zone(s) à traiter.",
+        log.info("🗺  Carte reconnue : %s (ressemblance %.0f %%) — %d point(s)/zone(s) de clic.",
                  self.circuit.nom(ident), 100 * score, len(indexees))
         if not indexees:
-            raise ArretBot(f"aucune zone (pour les céréales choisies) sur {self.circuit.nom(ident)} : "
-                           "dessinez-les avec python main.py zones")
+            raise ArretBot(f"aucun point de clic (pour les céréales choisies) sur {self.circuit.nom(ident)} : "
+                           "placez-les avec python main.py zones")
         verifier = cfg_c.get("verifier_infobulle", True) and self.infobulle.operationnel
         if cfg_c.get("verifier_infobulle", True) and not self.infobulle.operationnel:
             log.warning("Pas d'image « Faucher » ni d'OCR : clics sans vérification de l'infobulle.")
@@ -457,14 +460,15 @@ class Recolteur:
             a_faire = self.ordre_zones([(i, z) for i, z in indexees if i not in epuisees], souris.position())
             if not a_faire:
                 break
-            log.info("── Passe %d : %d zone(s)", passe, len(a_faire))
+            log.info("── Passe %d : %d point(s)/zone(s)", passe, len(a_faire))
             clics = illisibles = 0
             for k, (i, z) in enumerate(a_faire, 1):
                 self.etat.controle()
                 self.verifier_premier_plan()
                 if cfg_s.get("alertes_avant_chaque_clic", True):
                     self.verifier_alertes(capture)
-                etiquette = f"[{k}/{len(a_faire)}] zone {i + 1}" + (f" ({z['cereale']})" if z.get("cereale") else "")
+                etiquette = (f"[{k}/{len(a_faire)}] {'point' if est_point(z) else 'zone'} {i + 1}"
+                             + (f" ({z['cereale']})" if z.get("cereale") else ""))
                 if verifier:
                     verdict, detail = self.verdict_zone(capture, souris, z)
                     if verdict == L.EPUISEE:
@@ -476,13 +480,12 @@ class Recolteur:
                         illisibles += 1
                         log.info("  %s → pas d'infobulle, pas de clic (%s)", etiquette, detail)
                         if illisibles >= cfg_s["max_introuvables_consecutifs"]:
-                            raise ArretBot(f"aucune infobulle sur {illisibles} zones d'affilée : la carte "
-                                           "correspond-elle bien à la photo ? (zones décalées, zoom changé ?)")
+                            raise ArretBot(f"aucune infobulle sur {illisibles} points d'affilée : la carte "
+                                           "correspond-elle bien à la photo ? (points décalés, zoom changé ?)")
                         continue
                     illisibles = 0
                 else:
-                    px, py = souris.point_dans_boite(z["x"], z["y"], z["w"], z["h"], cfg_c.get("zone_clic", 0.7))
-                    souris.deplacer(px, py)
+                    souris.deplacer(*self.point_cible(z))
                     detail = "sans vérification"
                 self.verifier_premier_plan()        # dernière vérification juste avant le clic
                 souris.attendre("apres_survol")
@@ -515,20 +518,29 @@ class Recolteur:
                 verdict, detail = self.verdict_zone(capture, souris, z)
                 compte[verdict] = compte.get(verdict, 0) + 1
                 coul = {L.FAUCHER: (0, 220, 0), L.EPUISEE: (0, 0, 255)}.get(verdict, (255, 120, 0))
-                log.info("  zone %d → %s", i + 1, {L.FAUCHER: "Faucher (CLIQUERAIT)", L.EPUISEE: "Épuisé"}.get(
+                log.info("  %s %d → %s", "point" if est_point(z) else "zone", i + 1, {L.FAUCHER: "Faucher (CLIQUERAIT)", L.EPUISEE: "Épuisé"}.get(
                     verdict, f"pas d'infobulle ({detail})"))
-            x0, y0 = frame.vers_pixels(z["x"] - z["w"] / 2, z["y"] - z["h"] / 2)
-            x1, y1 = frame.vers_pixels(z["x"] + z["w"] / 2, z["y"] + z["h"] / 2)
-            cv2.rectangle(img, (x0, y0), (x1, y1), coul, max(1, int(frame.echelle)))
+            ep = max(1, int(frame.echelle))
+            if est_point(z):
+                cx, cy = frame.vers_pixels(z["x"], z["y"])
+                r = int(6 * frame.echelle)
+                cv2.circle(img, (cx, cy), r, coul, ep)
+                cv2.line(img, (cx - r - 3, cy), (cx + r + 3, cy), coul, ep)
+                cv2.line(img, (cx, cy - r - 3), (cx, cy + r + 3), coul, ep)
+                x0, y0 = cx - r, cy - r
+            else:
+                x0, y0 = frame.vers_pixels(z["x"] - z["w"] / 2, z["y"] - z["h"] / 2)
+                x1, y1 = frame.vers_pixels(z["x"] + z["w"] / 2, z["y"] + z["h"] / 2)
+                cv2.rectangle(img, (x0, y0), (x1, y1), coul, ep)
             cv2.putText(img, str(i + 1), (x0, max(10, y0 - 3)), cv2.FONT_HERSHEY_SIMPLEX, 0.4 * frame.echelle,
                         coul, max(1, int(frame.echelle / 2)))
         if survol:
             self.eloigner_souris(souris)
         vision.enregistrer(dossier / "zones.png", img)
-        log.info("══ Test %s : %d zone(s)%s → %s/zones.png", self.circuit.nom(ident), len(indexees),
+        log.info("══ Test %s : %d point(s)/zone(s)%s → %s/zones.png", self.circuit.nom(ident), len(indexees),
                  f" — Faucher {compte['faucher']}, Épuisé {compte['epuisee']}, sans infobulle {compte['inconnu']}"
                  if survol else "", dossier)
-        log.info("   Vert = cliquerait, rouge = épuisé, bleu = pas d'infobulle (zone mal placée ?), orange = non survolée.")
+        log.info("   Vert = cliquerait, rouge = épuisé, bleu = pas d'infobulle (point mal placé ?), orange = non survolé.")
         self.sons.jouer("fin_carte")
 
     # --------------------------------------------------------------- récolte
