@@ -51,6 +51,15 @@ circuit:
   # gauche : clé principale pour retrouver la carte (image en secours).
   # Nécessite Tesseract (brew install tesseract + pip install pytesseract)
   # ou Apple Vision (pip install pyobjc-framework-Vision).
+  # Quadrillage des cellules affiché dans l'éditeur (points écran, mesuré sur vos
+  # captures en plein écran 1440 x 760). Réglable dans l'éditeur (Maj+flèches, + / -).
+  grille:
+    afficher: true
+    aimant: false               # true : chaque clic se place au centre de sa cellule (touche A)
+    hauteur_cellule: 38.7       # cellule de 77,4 x 38,7 points
+    decalage_desc: 14.0
+    decalage_asc: 10.6
+    couleur: "#ff4fd8"
   coordonnees:
     actif: true
     zone: {left: 0, top: 50, width: 200, height: 22}   # points écran

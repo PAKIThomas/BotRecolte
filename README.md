@@ -60,6 +60,12 @@ chaque céréale de ce type**, à l'endroit exact où le bot devra cliquer.
 Chaque clic pose une cible numérotée, de la couleur de sa céréale.
 L'enregistrement est automatique.
 
+Un **quadrillage des cellules** (les losanges du jeu, 77,4 × 38,7 points) est
+affiché sur chaque photo, et la cellule sous la souris est entourée en blanc.
+Il a été mesuré sur vos captures en plein écran. S'il est décalé, recalez-le
+avec Maj+flèches et + / - : le réglage est enregistré dans
+`circuit/grille.json`.
+
 | Dans l'éditeur | Action |
 |---|---|
 | 1-9 | choisir la céréale (ordre de `--cereales`) |
@@ -67,6 +73,9 @@ L'enregistrement est automatique.
 | clic droit | supprimer le point |
 | C | donner la céréale choisie au point sous le curseur |
 | Z | annuler |
+| G | afficher / masquer le quadrillage des cellules |
+| A | aimant : chaque clic se place au centre de sa cellule |
+| Maj+flèches, + / - | recaler le quadrillage s'il ne tombe pas sur celui du jeu |
 | Tab | autre photo de la même carte |
 | R | renommer la carte |
 | → / Entrée, ← | carte suivante / précédente |

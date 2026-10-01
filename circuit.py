@@ -306,3 +306,75 @@ def point_de_clic(z: dict, jitter_point: float = 2.0, part_zone: float = 0.7) ->
         if abs(ox) >= 1 or abs(oy) >= 1:
             return z["x"] + ox, z["y"] + oy
     return z["x"] + 1.5, z["y"] + 1.5
+
+
+# =============================================================================
+#  Grille des cellules (losanges isométriques du jeu)
+# =============================================================================
+
+class Grille:
+    """Quadrillage des cellules du jeu, en points écran.
+
+    Les bords des cellules sont deux familles de droites de pente ±1/2 :
+        y + x/2 = decalage_desc + k * hauteur
+        y - x/2 = decalage_asc  + k * hauteur
+    Valeurs mesurées sur vos captures (plein écran 1440 x 760 points) :
+    cellules de 77,4 x 38,7 points. Réglables dans l'éditeur (Maj+flèches,
+    + et -), enregistrées dans circuit/grille.json."""
+
+    def __init__(self, cfg: dict, dossier: Path | None = None):
+        g = cfg.get("circuit", {}).get("grille", {})
+        self.hauteur = float(g.get("hauteur_cellule", 38.7))
+        self.desc = float(g.get("decalage_desc", 14.0))
+        self.asc = float(g.get("decalage_asc", 10.6))
+        self.visible = bool(g.get("afficher", True))
+        self.aimant = bool(g.get("aimant", False))
+        self.couleur = g.get("couleur", "#ff4fd8")
+        self.fichier = (dossier / "grille.json") if dossier else None
+        if self.fichier and self.fichier.exists():
+            try:
+                d = json.loads(self.fichier.read_text(encoding="utf-8"))
+                self.hauteur, self.desc, self.asc = d["hauteur_cellule"], d["decalage_desc"], d["decalage_asc"]
+            except Exception:
+                log.warning("Réglage de grille illisible : %s", self.fichier)
+
+    def sauver(self):
+        if self.fichier:
+            self.fichier.parent.mkdir(parents=True, exist_ok=True)
+            self.fichier.write_text(json.dumps({"hauteur_cellule": round(self.hauteur, 2),
+                                                "decalage_desc": round(self.desc, 2),
+                                                "decalage_asc": round(self.asc, 2)}, indent=1), encoding="utf-8")
+
+    def lignes(self, zone: dict) -> list[tuple[float, float, float, float]]:
+        """Segments (x0, y0, x1, y1) en points écran couvrant la zone de jeu."""
+        x0, y0 = zone["left"], zone["top"]
+        x1, y1 = x0 + zone["width"], y0 + zone["height"]
+        P = self.hauteur
+        segs = []
+        for signe, base in ((-1, self.desc), (1, self.asc)):
+            # y = signe * x / 2 + c, pour tous les c qui traversent la zone
+            cmin = min(y0 - signe * x0 / 2, y0 - signe * x1 / 2)
+            cmax = max(y1 - signe * x0 / 2, y1 - signe * x1 / 2)
+            k = int(np.floor((cmin - base) / P))
+            while base + k * P <= cmax:
+                c = base + k * P
+                segs.append((x0, signe * x0 / 2 + c, x1, signe * x1 / 2 + c))
+                k += 1
+        return segs
+
+    def cellule(self, px: float, py: float) -> tuple[int, int]:
+        return (int(np.floor((py + px / 2 - self.desc) / self.hauteur)),
+                int(np.floor((py - px / 2 - self.asc) / self.hauteur)))
+
+    def centre(self, px: float, py: float) -> tuple[float, float]:
+        """Centre de la cellule qui contient (px, py)."""
+        i, j = self.cellule(px, py)
+        a = self.desc + (i + 0.5) * self.hauteur      # y + x/2
+        b = self.asc + (j + 0.5) * self.hauteur       # y - x/2
+        return a - b, (a + b) / 2
+
+    def losange(self, px: float, py: float) -> list[tuple[float, float]]:
+        """Les 4 coins de la cellule qui contient (px, py) (haut, droite, bas, gauche)."""
+        cx, cy = self.centre(px, py)
+        w, h = self.hauteur, self.hauteur / 2
+        return [(cx, cy - h), (cx + w, cy), (cx, cy + h), (cx - w, cy)]

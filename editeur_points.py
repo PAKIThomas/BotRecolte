@@ -11,6 +11,9 @@ Commandes :
   clic droit         supprime le point sous le curseur
   C                  donne la céréale choisie au point sous le curseur
   Z                  annule la dernière modification
+  G                  affiche / masque le quadrillage des cellules
+  A                  aimant : chaque clic se place au centre de sa cellule
+  Maj+flèches, + / - recaler le quadrillage s'il ne tombe pas sur celui du jeu
   Tab                photo suivante de la même carte (s'il y en a plusieurs)
   R                  renomme la carte
   → / Entrée         carte suivante        ← carte précédente
@@ -26,7 +29,7 @@ import logging
 
 import cv2
 
-from circuit import Circuit, cible_sous, est_point, nouveau_point
+from circuit import Circuit, Grille, cible_sous, est_point, nouveau_point
 
 log = logging.getLogger("points")
 
@@ -58,6 +61,7 @@ class EditeurPoints:
         self.historique: list[list[dict]] = []
         self._souris = (0, 0)
         self.zj = cfg["ecran"]["zone_jeu"]
+        self.grille = Grille(cfg, self.circuit.dossier)
 
         self.racine = tk.Tk()
         self.racine.title("BotRecolte : points de clic")
@@ -76,7 +80,7 @@ class EditeurPoints:
         c.bind("<ButtonRelease-1>", self._clic)
         for b in ("<Button-2>", "<Button-3>", "<Control-Button-1>"):   # clic droit (macOS : Button-2)
             c.bind(b, self._supprimer_sous)
-        c.bind("<Motion>", lambda e: setattr(self, "_souris", (e.x, e.y)))
+        c.bind("<Motion>", self._survol)
         r = self.racine
         r.bind("<Return>", lambda e: self.aller(+1))
         r.bind("<Right>", lambda e: self.aller(+1))
@@ -85,6 +89,10 @@ class EditeurPoints:
         r.bind("<Escape>", lambda e: self.quitter())
         r.bind("<Delete>", lambda e: self.supprimer_carte())
         r.bind("<BackSpace>", lambda e: self.supprimer_carte())
+        r.bind("<Shift-Left>", lambda e: self._recaler(-0.5, 0, 0))
+        r.bind("<Shift-Right>", lambda e: self._recaler(0.5, 0, 0))
+        r.bind("<Shift-Up>", lambda e: self._recaler(0, -0.5, 0))
+        r.bind("<Shift-Down>", lambda e: self._recaler(0, 0.5, 0))
         r.bind("<Key>", self._touche)
         r.protocol("WM_DELETE_WINDOW", self.quitter)
 
@@ -133,6 +141,7 @@ class EditeurPoints:
         self.canvas.config(width=aff.shape[1], height=aff.shape[0])
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, image=self.photo, anchor="nw")
+        self._dessiner_grille()
         self._dessiner()
         return True
 
@@ -145,6 +154,42 @@ class EditeurPoints:
 
     def _couleur(self, cid: str) -> str:
         return COULEURS[self.cereales.index(cid) % 13] if cid in self.cereales else "#ffffff"
+
+    def _dessiner_grille(self):
+        """Quadrillage des cellules par-dessus la photo (sous les points)."""
+        c = self.canvas
+        c.delete("grille")
+        c.delete("survol")
+        if not self.grille.visible:
+            return
+        for x0, y0, x1, y1 in self.grille.lignes(self.zj):
+            a, b = self._vers_canvas(x0, y0)
+            d, f = self._vers_canvas(x1, y1)
+            c.create_line(a, b, d, f, fill=self.grille.couleur, width=1, tags=("grille",))
+        c.tag_raise("point")
+
+    def _survol(self, e):
+        """Met en évidence la cellule sous la souris."""
+        self._souris = (e.x, e.y)
+        c = self.canvas
+        c.delete("survol")
+        if not self.grille.visible or not self.ids:
+            return
+        coins = [self._vers_canvas(*p) for p in self.grille.losange(*self._vers_ecran(e.x, e.y))]
+        c.create_polygon(*[v for p in coins for v in p], outline="#ffffff", fill="", width=2, tags=("survol",))
+        c.tag_raise("point")
+
+    def _recaler(self, dx: float, dy: float, dtaille: float):
+        """Décale (Maj+flèches) ou agrandit (+/-) le quadrillage, en points."""
+        g = self.grille
+        g.desc += dy + dx / 2
+        g.asc += dy - dx / 2
+        g.hauteur = max(10.0, g.hauteur + dtaille)
+        g.sauver()
+        self._dessiner_grille()
+        self.info.config(text=f"Quadrillage : cellule {2 * g.hauteur:.1f} × {g.hauteur:.1f} points, "
+                              f"décalages {g.desc:.1f} / {g.asc:.1f} (enregistré)")
+        return "break"
 
     def _dessiner(self):
         c = self.canvas
@@ -178,7 +223,8 @@ class EditeurPoints:
             f"{self.circuit.nom(ident)}  —  carte {self.index + 1}/{len(self.ids)}  —  photo {self.photo_n + 1}/{nb}"
             f"  —  {len(self.points)} point(s) de clic  —  cartes sans point : {sans}\n"
             f"Céréale choisie : {nom} (1-9 pour changer)  |  clic = point de clic · clic droit = supprimer · "
-            f"C = changer la céréale du point · Z = annuler · Tab = autre photo · R = renommer · "
+            f"C = changer la céréale du point · Z = annuler · G = quadrillage · "
+            f"A = aimant {'ACTIF' if self.grille.aimant else 'inactif'} · Tab = autre photo · R = renommer · "
             f"→/← = cartes · Suppr = supprimer la carte · Échap = quitter  (enregistrement automatique)"))
 
     # ---------------------------------------------------------------- souris
@@ -199,8 +245,11 @@ class EditeurPoints:
         if not self.ids:
             return
         cereale = self.cereales[self.courante] if self.cereales else ""
+        px, py = self._vers_ecran(e.x, e.y)
+        if self.grille.aimant:
+            px, py = self.grille.centre(px, py)
         self._memoriser()
-        self.points.append(nouveau_point(*self._vers_ecran(e.x, e.y), cereale))
+        self.points.append(nouveau_point(px, py, cereale))
         self._enregistrer()
 
     def _supprimer_sous(self, e):
@@ -227,6 +276,16 @@ class EditeurPoints:
                 self._enregistrer()
         elif k == "r":
             self.renommer()
+        elif k == "g":
+            self.grille.visible = not self.grille.visible
+            self._dessiner_grille()
+        elif k == "a":
+            self.grille.aimant = not self.grille.aimant
+            self._maj_info()
+        elif k in ("+", "="):
+            self._recaler(0, 0, 0.1)
+        elif k == "-":
+            self._recaler(0, 0, -0.1)
 
     # --------------------------------------------------------------- actions
 
