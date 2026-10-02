@@ -396,3 +396,91 @@ class Grille:
         cx, cy = self.centre(px, py)
         w, h = self.hauteur, self.hauteur / 2
         return [(cx, cy - h), (cx + w, cy), (cx, cy + h), (cx - w, cy)]
+
+
+# =============================================================================
+#  Suggestions : céréales probablement oubliées
+# =============================================================================
+
+def _histo(patch: np.ndarray) -> np.ndarray:
+    h = cv2.calcHist([cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)], [0, 1], None, [18, 8], [0, 180, 0, 256])
+    return cv2.normalize(h, h).flatten()
+
+
+def suggerer(circuit: "Circuit", grille: Grille, ident: str, cereales: list[str],
+             seuil: float = 0.62, rayon: int = 18, max_modeles: int = 40) -> list[dict]:
+    """Cellules de la carte qui ressemblent à vos points de clic déjà posés
+    (même céréale, sur cette carte et les autres) et qui n'ont pas encore de
+    point. Ressemblance = moitié forme (corrélation), moitié couleurs
+    (histogramme teinte/saturation). Retourne des points proposés, avec la
+    céréale la plus ressemblante et un score 0..1."""
+    zj = circuit.zone_jeu
+
+    def photo(i):
+        chemin = circuit.chemin_photo(i, 0)
+        img = cv2.imread(str(chemin)) if chemin else None
+        return img, (img.shape[1] / zj["width"] if img is not None else 1.0)
+
+    def patch(img, e, px, py, r):
+        x, y = int(round((px - zj["left"]) * e)), int(round((py - zj["top"]) * e))
+        r = int(round(r * e))
+        if x - r < 0 or y - r < 0 or x + r > img.shape[1] or y + r > img.shape[0]:
+            return None
+        return img[y - r:y + r, x - r:x + r]
+
+    # Modèles : vos points déjà posés, par céréale.
+    modeles: dict[str, list[tuple[np.ndarray, np.ndarray]]] = {}
+    decalages: dict[str, list[tuple[float, float]]] = {}
+    for i, carte in circuit.cartes.items():
+        img, e = photo(i)
+        if img is None:
+            continue
+        for z in carte.get("zones", []):
+            c = z.get("cereale")
+            if not c or c not in cereales or len(modeles.get(c, [])) >= max_modeles:
+                continue
+            p = patch(img, e, z["x"], z["y"], rayon)
+            if p is None:
+                continue
+            if e != 1.0:
+                p = cv2.resize(p, (2 * rayon, 2 * rayon), interpolation=cv2.INTER_AREA)
+            modeles.setdefault(c, []).append((p, _histo(p)))
+            cx, cy = grille.centre(z["x"], z["y"])
+            decalages.setdefault(c, []).append((z["x"] - cx, z["y"] - cy))
+    if not modeles:
+        return []
+    img, e = photo(ident)
+    if img is None:
+        return []
+    if e != 1.0:
+        img = cv2.resize(img, (zj["width"], zj["height"]), interpolation=cv2.INTER_AREA)
+        e = 1.0
+    existants = {grille.cellule(z["x"], z["y"]) for z in circuit.zones(ident)}
+    # Une cellule candidate par cellule de la grille.
+    vues, suggestions = set(), []
+    for y in range(zj["top"], zj["top"] + zj["height"], 6):
+        for x in range(zj["left"], zj["left"] + zj["width"], 6):
+            cell = grille.cellule(x, y)
+            if cell in vues or cell in existants:
+                continue
+            vues.add(cell)
+            cx, cy = grille.centre(x, y)
+            zone = patch(img, e, cx, cy, rayon + 4)
+            centre = patch(img, e, cx, cy, rayon)
+            if zone is None or centre is None:
+                continue
+            h = _histo(centre)
+            meilleur = (0.0, "")
+            for c, liste in modeles.items():
+                forme = max(float(cv2.matchTemplate(zone, m, cv2.TM_CCOEFF_NORMED).max()) for m, _ in liste)
+                couleur = max(float(cv2.compareHist(h, hm, cv2.HISTCMP_CORREL)) for _, hm in liste)
+                score = 0.5 * forme + 0.5 * couleur
+                if score > meilleur[0]:
+                    meilleur = (score, c)
+            if meilleur[0] >= seuil:
+                c = meilleur[1]
+                dx = float(np.median([d[0] for d in decalages[c]]))
+                dy = float(np.median([d[1] for d in decalages[c]]))
+                suggestions.append({"type": "point", "x": round(cx + dx, 1), "y": round(cy + dy, 1),
+                                    "w": 0, "h": 0, "cereale": c, "score": round(meilleur[0], 2)})
+    return suggestions

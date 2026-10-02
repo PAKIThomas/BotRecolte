@@ -11,6 +11,8 @@ Commandes :
   clic droit         supprime le point sous le curseur
   C                  donne la céréale choisie au point sous le curseur
   Z                  annule la dernière modification
+  S                  propose les céréales oubliées (cercles pointillés) :
+                     clic = accepter, clic droit = rejeter ; Maj+S = tout accepter
   G                  affiche / masque le quadrillage des cellules
   A                  aimant : chaque clic se place au centre de sa cellule
   Maj+flèches, + / - recaler le quadrillage s'il ne tombe pas sur celui du jeu
@@ -29,7 +31,7 @@ import logging
 
 import cv2
 
-from circuit import Circuit, Grille, cible_sous, est_point, nouveau_point
+from circuit import Circuit, Grille, cible_sous, est_point, nouveau_point, suggerer
 
 log = logging.getLogger("points")
 
@@ -62,6 +64,7 @@ class EditeurPoints:
         self._souris = (0, 0)
         self.zj = cfg["ecran"]["zone_jeu"]
         self.grille = Grille(cfg, self.circuit.dossier)
+        self.suggestions: list[dict] = []
 
         self.racine = tk.Tk()
         self.racine.title("BotRecolte : points de clic")
@@ -93,6 +96,7 @@ class EditeurPoints:
         r.bind("<Shift-Right>", lambda e: self._recaler(0.5, 0, 0))
         r.bind("<Shift-Up>", lambda e: self._recaler(0, -0.5, 0))
         r.bind("<Shift-Down>", lambda e: self._recaler(0, 0.5, 0))
+        r.bind("<Shift-S>", lambda e: self.accepter_tout())
         r.bind("<Key>", self._touche)
         r.protocol("WM_DELETE_WINDOW", self.quitter)
 
@@ -134,6 +138,7 @@ class EditeurPoints:
         self.e = img.shape[1] / self.zj["width"]          # pixels de la photo par point écran
         self.points = copy.deepcopy(self.circuit.zones(ident))
         self.historique = []
+        self.suggestions = []
         self.f = min(1.0, self.max_w / img.shape[1], self.max_h / img.shape[0])
         aff = cv2.resize(img, None, fx=self.f, fy=self.f, interpolation=cv2.INTER_AREA) if self.f < 1 else img
         ok, png = cv2.imencode(".png", aff)
@@ -194,6 +199,13 @@ class EditeurPoints:
     def _dessiner(self):
         c = self.canvas
         c.delete("point")
+        c.delete("suggestion")
+        for s_ in self.suggestions:
+            x, y = self._vers_canvas(s_["x"], s_["y"])
+            coul = self._couleur(s_["cereale"])
+            c.create_oval(x - 8, y - 8, x + 8, y + 8, outline=coul, width=2, dash=(3, 2), tags=("suggestion",))
+            c.create_text(x + 10, y + 8, anchor="nw", fill=coul, font=("Helvetica", 9),
+                          text=f"? {s_['score']:.2f}", tags=("suggestion",))
         for i, p in enumerate(self.points):
             x, y = self._vers_canvas(p["x"], p["y"])
             coul = self._couleur(p.get("cereale", ""))
@@ -223,7 +235,7 @@ class EditeurPoints:
             f"{self.circuit.nom(ident)}  —  carte {self.index + 1}/{len(self.ids)}  —  photo {self.photo_n + 1}/{nb}"
             f"  —  {len(self.points)} point(s) de clic  —  cartes sans point : {sans}\n"
             f"Céréale choisie : {nom} (1-9 pour changer)  |  clic = point de clic · clic droit = supprimer · "
-            f"C = changer la céréale du point · Z = annuler · G = quadrillage · "
+            f"C = changer la céréale du point · S = céréales oubliées · Z = annuler · G = quadrillage · "
             f"A = aimant {'ACTIF' if self.grille.aimant else 'inactif'} · Tab = autre photo · R = renommer · "
             f"→/← = cartes · Suppr = supprimer la carte · Échap = quitter  (enregistrement automatique)"))
 
@@ -241,8 +253,19 @@ class EditeurPoints:
     def _memoriser(self):
         self.historique.append(copy.deepcopy(self.points))
 
+    def _suggestion_sous(self, cx, cy) -> int | None:
+        px, py = self._vers_ecran(cx, cy)
+        return cible_sous(self.suggestions, px, py, rayon_point=10 / (self.e * self.f))
+
     def _clic(self, e):
         if not self.ids:
+            return
+        k = self._suggestion_sous(e.x, e.y)
+        if k is not None:
+            s_ = self.suggestions.pop(k)
+            self._memoriser()
+            self.points.append(nouveau_point(s_["x"], s_["y"], s_["cereale"]))
+            self._enregistrer()
             return
         cereale = self.cereales[self.courante] if self.cereales else ""
         px, py = self._vers_ecran(e.x, e.y)
@@ -253,6 +276,11 @@ class EditeurPoints:
         self._enregistrer()
 
     def _supprimer_sous(self, e):
+        k = self._suggestion_sous(e.x, e.y)
+        if k is not None:
+            self.suggestions.pop(k)
+            self._dessiner()
+            return
         i = self._point_sous(e.x, e.y)
         if i is not None:
             self._memoriser()
@@ -276,6 +304,8 @@ class EditeurPoints:
                 self._enregistrer()
         elif k == "r":
             self.renommer()
+        elif k == "s":
+            self.basculer_suggestions()
         elif k == "g":
             self.grille.visible = not self.grille.visible
             self._dessiner_grille()
@@ -288,6 +318,35 @@ class EditeurPoints:
             self._recaler(0, 0, -0.1)
 
     # --------------------------------------------------------------- actions
+
+    def basculer_suggestions(self):
+        """S : calcule (ou masque) les céréales probablement oubliées."""
+        if self.suggestions:
+            self.suggestions = []
+            self._dessiner()
+            return
+        self.info.config(text="Recherche des céréales oubliées…")
+        self.racine.update_idletasks()
+        seuil = self.cfg.get("circuit", {}).get("suggestions", {}).get("seuil", 0.62)
+        self.suggestions = suggerer(self.circuit, self.grille, self.ids[self.index], self.cereales, seuil)
+        self._dessiner()
+        if not self.suggestions:
+            self.info.config(text="Aucune suggestion : posez d'abord quelques points de chaque céréale "
+                                  "(ils servent de modèles), ou rien ne ressemble à vos points.")
+        else:
+            self.info.config(text=f"{len(self.suggestions)} suggestion(s) en pointillés : clic = accepter, "
+                                  f"clic droit = rejeter, Maj+S = tout accepter, S = masquer.")
+
+    def accepter_tout(self):
+        if not self.suggestions:
+            return
+        self._memoriser()
+        for s_ in self.suggestions:
+            self.points.append(nouveau_point(s_["x"], s_["y"], s_["cereale"]))
+        n = len(self.suggestions)
+        self.suggestions = []
+        self._enregistrer()
+        self.info.config(text=f"{n} suggestion(s) acceptée(s). Z pour annuler.")
 
     def aller(self, pas: int):
         if not self.ids:

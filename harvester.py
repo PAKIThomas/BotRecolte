@@ -42,6 +42,7 @@ from ia import DetecteurIA, EnregistreurCartes
 from memoire import MemoireCartes
 from mouse import ArretDemande, SourisHumaine
 from safety import Etat, Sons, dofus_au_premier_plan
+from stats import Statistiques
 
 log = logging.getLogger("recolte")
 
@@ -71,6 +72,9 @@ class Recolteur:
         self.dossier_debug = Path(cfg["debug"]["dossier"])
         self.collecteur = Collecteur(cfg)
         self.carte_id: str | None = None
+        self.auto = False                    # lancé par le démarrage automatique ?
+        self.coords_traitees: str | None = None   # coordonnées de la dernière carte traitée
+        self.stats = Statistiques(cfg)
         self.dernier_point: tuple[float, float] = (0.0, 0.0)
         # Délai d'apparition de l'infobulle, appris au fil des survols.
         self._delais_infobulle: list[float] = []
@@ -84,7 +88,7 @@ class Recolteur:
         if self.methode != "zones" and not self.mode_test and not self.infobulle.operationnel:
             log.warning("Infobulles illisibles (pas d'image « Faucher » ni d'OCR) : "
                         "aucun clic ne sera fait. Lancez d'abord le mode test.")
-        if not self.surbrillance.operationnel:
+        if self.methode != "zones" and not self.surbrillance.operationnel:
             log.info("Pas d'image de surbrillance : fin de file détectée par stabilité de l'image.")
         if not self.alertes.templates:
             log.info("Aucune image dans assets/alertes/ : combat/inventaire plein non détectés visuellement.")
@@ -121,8 +125,10 @@ class Recolteur:
 
     # ------------------------------------------------------------------ entrée
 
-    def executer(self):
-        """Appelé dans un thread à chaque appui sur la touche « scanner »."""
+    def executer(self, auto: bool = False):
+        """Appelé dans un thread à chaque appui sur la touche « scanner », ou
+        par le démarrage automatique (auto=True) à l'arrivée sur une carte."""
+        self.auto = auto
         capture = vision.Capture(self.cfg)   # une instance mss par thread
         souris = None if self.mode == "photo" else SourisHumaine(
             self.cfg, controle=self.etat.controle, simulation=self.mode_test)
@@ -384,8 +390,8 @@ class Recolteur:
         finally:
             capture.fermer()
 
-    def deja_en_file(self, capture: vision.Capture, souris: SourisHumaine, ident: str, z: dict
-                     ) -> tuple[bool, float, float]:
+    def deja_en_file(self, capture: vision.Capture, souris: SourisHumaine, ident: str, z: dict,
+                     ecran: vision.Frame | None = None) -> tuple[bool, float, float]:
         """La céréale du point est-elle déjà dans la file de récolte ?
 
         Dans Dofus 3, une céréale déjà sélectionnée est entourée d'un contour
@@ -397,8 +403,17 @@ class Recolteur:
         if not cfg.get("actif", True):
             return False, 0.0, 0.0
         r = float(cfg.get("rayon", 22))
-        frame = capture.grab({"left": max(0, z["x"] - r), "top": max(0, z["y"] - r),
-                              "width": 2 * r, "height": 2 * r})
+        if ecran is not None:
+            # Découpe dans une capture de toute la zone de jeu.
+            x0, y0 = ecran.vers_pixels(z["x"] - r, z["y"] - r)
+            x1, y1 = ecran.vers_pixels(z["x"] + r, z["y"] + r)
+            H, W = ecran.image.shape[:2]
+            gx, gy = max(0, x0), max(0, y0)
+            frame = vision.Frame(ecran.image[gy:min(H, y1), gx:min(W, x1)],
+                                 ecran.left + gx / ecran.echelle, ecran.top + gy / ecran.echelle, ecran.echelle)
+        else:
+            frame = capture.grab({"left": max(0, z["x"] - r), "top": max(0, z["y"] - r),
+                                  "width": 2 * r, "height": 2 * r})
         masque = np.full(frame.image.shape[:2], 255, np.uint8)
         mx, my = souris.position()
         x0, y0 = frame.vers_pixels(mx - 4, my - 4)
@@ -460,6 +475,12 @@ class Recolteur:
         frame = capture.grab()
         self.verifier_alertes(capture, frame)
         ident, score, pourquoi = self.circuit.reconnaitre(frame)
+        self.coords_traitees = self.circuit.dernieres_coords
+        if not ident and self.auto:
+            # Démarrage automatique : une carte de passage (non photographiée)
+            # n'est pas une erreur, on attend simplement la suivante.
+            log.info("🗺  Carte %s non photographiée : rien à récolter ici.", self.circuit.dernieres_coords or "?")
+            return
         if not ident:
             if test:
                 vision.enregistrer(self.dossier_debug / datetime.now().strftime("%Y%m%d_%H%M%S") / "capture.png",
@@ -472,6 +493,9 @@ class Recolteur:
         log.info("🗺  Carte reconnue : %s (par %s, ressemblance %.0f %%) — %d point(s) de clic.",
                  self.circuit.nom(ident), pourquoi, 100 * score, len(indexees))
         if not indexees:
+            if self.auto:
+                log.info("   Aucun point pour les céréales cochées sur cette carte : rien à faire.")
+                return
             raise ArretBot(f"aucun point de clic (pour les céréales choisies) sur {self.circuit.nom(ident)} : "
                            "placez-les avec python main.py points")
         # Règle : clic UNIQUEMENT si l'infobulle « Faucher » est lue ; jamais
@@ -488,14 +512,21 @@ class Recolteur:
             return
 
         epuisees: set[int] = set()
-        total = 0
+        confirmes: set[int] = set()          # clic pris en compte (contour blanc vu)
+        a_revoir: set[int] | None = None     # passages suivants : seulement ces points
+        bilan = {"fauchees": 0, "epuisees": 0, "deja": 0, "illisibles": 0, "par_cereale": {}}
+        cliques_carte: dict[int, str] = {}     # points cliqués (une fois chacun) -> céréale
         passes = max(1, int(cfg_c.get("passes", 2))) if verifier else 1
         for passe in range(1, passes + 1):
-            a_faire = self.ordre_zones([(i, z) for i, z in indexees if i not in epuisees], souris.position())
+            a_faire = self.ordre_zones([(i, z) for i, z in indexees
+                                        if i not in epuisees and i not in confirmes
+                                        and (a_revoir is None or i in a_revoir)], souris.position())
             if not a_faire:
                 break
             log.info("── Passe %d : %d point(s)", passe, len(a_faire))
-            clics = illisibles = 0
+            cliques: list[tuple[int, dict]] = []
+            sans_infobulle: set[int] = set()
+            illisibles = 0
             for k, (i, z) in enumerate(a_faire, 1):
                 self.etat.controle()
                 self.verifier_premier_plan()
@@ -505,6 +536,8 @@ class Recolteur:
                              + (f" ({z['cereale']})" if z.get("cereale") else ""))
                 en_file, blanc, _ = self.deja_en_file(capture, souris, ident, z)
                 if en_file:
+                    confirmes.add(i)
+                    bilan["deja"] += 1
                     log.info("  %s → déjà dans la file (surbrillance blanche %.0f %%), pas de clic",
                              etiquette, 100 * blanc)
                     continue
@@ -512,11 +545,13 @@ class Recolteur:
                     verdict, detail = self.verdict_zone(capture, souris, z)
                     if verdict == L.EPUISEE:
                         epuisees.add(i)
+                        bilan["epuisees"] += 1
                         illisibles = 0
                         log.info("  %s → Épuisé ✘", etiquette)
                         continue
                     if verdict != L.FAUCHER:
                         illisibles += 1
+                        sans_infobulle.add(i)
                         log.info("  %s → pas d'infobulle, pas de clic (%s)", etiquette, detail)
                         if illisibles >= cfg_s["max_introuvables_consecutifs"]:
                             raise ArretBot(f"aucune infobulle sur {illisibles} points d'affilée : la carte "
@@ -529,17 +564,70 @@ class Recolteur:
                 self.verifier_premier_plan()        # dernière vérification juste avant le clic
                 souris.attendre("apres_survol")
                 souris.clic_gauche()
-                clics += 1
+                cliques.append((i, z))
                 log.info("  %s → ✔ clic (%s)", etiquette, detail)
                 souris.attendre("entre_clics")
-            total += clics
-            if clics == 0:
+                # Le clic est-il pris en compte ? (la céréale prend le contour blanc)
+                if self.deja_en_file(capture, souris, ident, z)[0]:
+                    confirmes.add(i)
+            bilan["illisibles"] = len(sans_infobulle)
+            if not cliques:
                 break
             self.eloigner_souris(souris)
-            self.attendre_fin_file(capture, souris, clics)
-        log.info("✔ Carte terminée : %d clic(s) en %.0f s. Changez de carte puis appuyez sur la touche scanner.",
-                 total, time.monotonic() - debut)
+            self.attendre_fin_points(capture, souris, ident, cliques, confirmes)
+            for i, z in cliques:
+                cliques_carte[i] = z.get("cereale") or "?"
+            # Passage suivant : seulement les clics jamais confirmés et les points
+            # sans infobulle (personnage devant, infobulle tardive...).
+            a_revoir = {i for i, _ in cliques if i not in confirmes} | sans_infobulle
+            if not a_revoir:
+                break
+        # Fauchées = points cliqués (un clic perdu puis refait ne compte qu'une fois).
+        bilan["fauchees"] = len(cliques_carte)
+        for c in cliques_carte.values():
+            bilan["par_cereale"][c] = bilan["par_cereale"].get(c, 0) + 1
+        duree = time.monotonic() - debut
+        self.stats.carte_terminee(self.circuit.nom(ident), self.circuit.cartes[ident].get("coords", ""),
+                                  duree, bilan)
+        log.info("✔ Carte terminée en %.0f s.%s", duree,
+                 "" if self.auto else " Changez de carte puis appuyez sur la touche scanner.")
         self.sons.jouer("fin_carte")
+
+    def attendre_fin_points(self, capture: vision.Capture, souris: SourisHumaine, ident: str,
+                            cliques: list[tuple[int, dict]], confirmes: set[int]):
+        """Fin de file précise : tant qu'une céréale cliquée garde son contour
+        blanc, le personnage n'a pas fini. Dès qu'il n'y en a plus (vérifié
+        deux fois de suite), la carte est terminée."""
+        cfg_f = self.cfg["file_attente"]
+        debut = time.monotonic()
+        souris.dormir(cfg_f.get("attente_points", 0.3))
+        vides = 0
+        restantes_avant = None
+        while time.monotonic() - debut < cfg_f["timeout"]:
+            self.etat.controle()
+            ecran = capture.grab()
+            self.verifier_alertes(capture, ecran)
+            restantes = 0
+            for i, z in cliques:
+                if self.deja_en_file(capture, souris, ident, z, ecran=ecran)[0]:
+                    confirmes.add(i)
+                    restantes += 1
+            if restantes_avant is None and restantes == 0 and not any(i in confirmes for i, _ in cliques):
+                # Aucun contour blanc vu après les clics : la détection de
+                # surbrillance ne marche pas ici -> ancienne méthode (image stable).
+                log.info("Surbrillance non détectée : fin de file par stabilité de l'image.")
+                return self.attendre_fin_file(capture, souris, len(cliques))
+            if restantes != restantes_avant:
+                log.info("… %d céréale(s) encore dans la file", restantes)
+                restantes_avant = restantes
+            vides = vides + 1 if restantes == 0 else 0
+            if vides >= cfg_f.get("verifs_confirmation", 2):
+                log.info("✔ File terminée en %.1f s", time.monotonic() - debut)
+                return True
+            souris.dormir(cfg_f.get("intervalle_points", 0.35))
+        log.warning("⚠ Timeout de la file (%ds).", cfg_f["timeout"])
+        self.sons.jouer("erreur")
+        return False
 
     def _test_zones(self, capture, souris, frame, ident, indexees, verifier):
         """Mode test : dessine les points sur la capture actuelle (pour vérifier

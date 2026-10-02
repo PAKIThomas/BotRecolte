@@ -60,6 +60,12 @@ chaque céréale de ce type**, à l'endroit exact où le bot devra cliquer.
 Chaque clic pose une cible numérotée, de la couleur de sa céréale.
 L'enregistrement est automatique.
 
+**Céréales oubliées (touche S).** Posez d'abord quelques points de chaque
+céréale. S compare ensuite chaque cellule de la carte à vos points déjà posés
+(sur cette carte et les autres), en forme et en couleur, et propose celles qui
+leur ressemblent et n'ont pas encore de point. Rien n'est ajouté sans votre
+clic. Seuil réglable : `circuit.suggestions.seuil`.
+
 Un **quadrillage des cellules** (les losanges du jeu, 77,4 × 38,7 points) est
 affiché sur chaque photo, et la cellule sous la souris est entourée en blanc.
 Il a été mesuré sur vos captures en plein écran. S'il est décalé, recalez-le
@@ -73,6 +79,8 @@ avec Maj+flèches et + / - : le réglage est enregistré dans
 | clic droit | supprimer le point |
 | C | donner la céréale choisie au point sous le curseur |
 | Z | annuler |
+| S | proposer les céréales oubliées (cercles pointillés) : clic = accepter, clic droit = rejeter |
+| Maj+S | accepter toutes les propositions |
 | G | afficher / masquer le quadrillage des cellules |
 | A | aimant : chaque clic se place au centre de sa cellule |
 | Maj+flèches, + / - | recaler le quadrillage s'il ne tombe pas sur celui du jeu |
@@ -90,8 +98,18 @@ survol, lit l'infobulle de chaque point, **sans cliquer** :
 - violet : déjà dans la file ;
 - bleu : pas d'infobulle, le point est sans doute mal placé.
 
-**3. Récolte.** Cochez les céréales voulues, mode « Récolte ». Sur chaque
-carte, appuyez sur **N** :
+**3. Récolte.** Cochez les céréales voulues, mode « Récolte ».
+
+Avec la case **« Démarrage automatique »** (cochée par défaut), vous n'avez
+plus rien à faire : changez simplement de carte. Dès que de nouvelles
+coordonnées s'affichent et que la carte a fini de charger, la récolte se lance
+seule. Une carte non photographiée (carte de passage) est ignorée sans erreur.
+Une carte déjà traitée n'est pas relancée tant que vous n'en changez pas ;
+**N** reste disponible pour relancer à la main. Ce mode nécessite la lecture
+des coordonnées.
+
+Sans démarrage automatique, appuyez sur **N** sur chaque carte. Dans les deux
+cas, le bot fait ceci :
 1. le bot lit les **coordonnées de la carte** (ex. « -28, -37 », en haut à
    gauche, sous le nom de la zone) et retrouve la carte photographiée à ces
    coordonnées. Si elles sont illisibles, il compare l'écran à vos photos ;
@@ -100,9 +118,19 @@ carte, appuyez sur **N** :
    différent du simple survol) est ignorée : ni survol, ni clic ;
 3. pour chacun, il survole le point et clique **uniquement s'il lit
    « Faucher »**. « Épuisé » ou pas d'infobulle : pas de clic ;
-4. il attend la fin de la file, puis fait un 2ᵉ passage pour les points encore
-   « Faucher » ;
-5. il joue le son de fin de carte.
+4. après chaque clic, il vérifie que la céréale a pris le **contour blanc**
+   (clic pris en compte) ;
+5. il suit la file : dès que plus aucune céréale cliquée n'a de contour
+   blanc, la récolte est finie (s'il ne voit aucun contour blanc, il attend
+   que l'image soit stable) ;
+6. un 2ᵉ passage revérifie **seulement** les clics non confirmés et les
+   points sans infobulle ;
+7. il affiche le bilan de la carte et joue le son de fin de carte.
+
+**Statistiques.** Après chaque carte, le terminal affiche les céréales
+fauchées (par type), la durée et le total de la session. Une ligne par carte
+est ajoutée à `stats/recoltes.csv`. Le résumé de la session s'affiche quand
+vous quittez (Ctrl+C).
 
 Le clic tombe **pile** sur votre point (`circuit.jitter_point: 0` ; 1 ou 2
 pour varier légèrement). Si les infobulles ne peuvent pas être lues (pas
@@ -136,6 +164,13 @@ python main.py points --carte carte_003              # rouvre une carte précise
 
 Si vous changez la résolution ou le zoom du jeu, les points ne tombent plus
 au bon endroit : refaites les photos et les points.
+
+**Combat, niveau supérieur, inventaire plein.** Recadrez un élément
+caractéristique de chaque situation (le bouton « Prêt » ou la barre de combat,
+le titre de la fenêtre de niveau, le message d'inventaire plein) avec
+Cmd+Maj+4 et placez l'image dans `assets/alertes/`. Le bot vérifie ces images
+avant chaque clic et pendant l'attente de la file : si l'une apparaît, il
+s'arrête, joue un son et vous rend la main.
 
 Le bot s'arrête, joue un son et vous rend la main dans ces cas :
 - carte non reconnue ;
@@ -382,6 +417,9 @@ points et dessine `zone_jeu` (vert) et `zones_exclues` (rouge) dans
 | `circuit.py` | cartes photographiées, reconnaissance de la carte, points de clic |
 | `editeur_points.py` | éditeur des points de clic (`python main.py points`) |
 | `harvester.py` | boucle de récolte (points ou détection), file d'attente, mode test |
+| `auto.py` | démarrage automatique à l'arrivée sur une carte |
+| `stats.py` | statistiques par carte et par session |
+| `coordonnees.py` | lecture des coordonnées de la carte |
 | `apprentissage.py` | captures Maj+O / Maj+E, collecte auto, `evaluer` |
 | `ia.py` | IA : dataset de cartes, entraînement YOLO, détecteur |
 | `annoteur.py` | fenêtre d'annotation des cartes (`python main.py annoter`) |

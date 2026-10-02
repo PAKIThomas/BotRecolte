@@ -366,9 +366,9 @@ def lancer_bot(cfg: dict, choix: dict):
     # Thread du bot
     # -------------------------------------------------------------------------
 
-    def tache():
+    def tache(auto: bool = False):
         try:
-            recolteur.executer()
+            recolteur.executer(auto=auto)
 
         except Exception:
             log.exception(
@@ -379,7 +379,8 @@ def lancer_bot(cfg: dict, choix: dict):
             etat.occupe.clear()
 
             log.info(
-                "En attente… [%s] scanner  [%s] pause  [%s] arrêt",
+                "En attente%s… [%s] scanner  [%s] pause  [%s] arrêt",
+                " de la prochaine carte" if surveillant_actif["oui"] else "",
                 raccourcis["scanner"].upper(),
                 raccourcis["pause"].upper(),
                 raccourcis["arret_urgence"].upper(),
@@ -388,6 +389,43 @@ def lancer_bot(cfg: dict, choix: dict):
     # -------------------------------------------------------------------------
     # Callback clavier
     # -------------------------------------------------------------------------
+
+    surveillant_actif = {"oui": False}
+
+    def lancer_scan(auto: bool = False):
+        """Démarre une récolte (touche N, ou démarrage automatique)."""
+        if etat.occupe.is_set():
+            if not auto:
+                log.info(
+                    "Déjà en cours (arrêt : %s).",
+                    raccourcis["arret_urgence"].upper(),
+                )
+            return
+
+        etat.arret.clear()
+
+        if etat.en_pause:
+            if auto:
+                return
+            etat.basculer_pause()
+
+        etat.occupe.set()
+
+        if not auto:
+            log.info(
+                "▶ %s…",
+                {
+                    "photo": "Photo de la carte",
+                    "test": "TEST de la carte (aucun clic)",
+                }.get(mode, "Récolte de la carte"),
+            )
+
+        threading.Thread(
+            target=tache,
+            kwargs={"auto": auto},
+            name="BotRecolte",
+            daemon=True,
+        ).start()
 
     def appui(touche):
         """
@@ -479,40 +517,7 @@ def lancer_bot(cfg: dict, choix: dict):
             # -------------------------------------------------------------
 
             if correspond(touche, t_scan):
-
-                if etat.occupe.is_set():
-                    log.info(
-                        "Déjà en cours (arrêt : %s).",
-                        raccourcis["arret_urgence"].upper(),
-                    )
-                    return
-
-                etat.arret.clear()
-
-                if etat.en_pause:
-                    try:
-                        etat.basculer_pause()
-                    except Exception:
-                        log.exception(
-                            "Erreur lors de la sortie de pause."
-                        )
-
-                etat.occupe.set()
-
-                log.info(
-                    "▶ %s…",
-                    {
-                        "photo": "Photo de la carte",
-                        "test": "TEST de la carte (aucun clic)",
-                    }.get(mode, "Récolte de la carte"),
-                )
-
-                threading.Thread(
-                    target=tache,
-                    name="BotRecolte",
-                    daemon=True,
-                ).start()
-
+                lancer_scan()
                 return
 
         except Exception:
@@ -640,6 +645,32 @@ def lancer_bot(cfg: dict, choix: dict):
         )
 
     # -------------------------------------------------------------------------
+    # Démarrage automatique à l'arrivée sur une carte
+    # -------------------------------------------------------------------------
+
+    surveillant = None
+
+    if choix.get("auto") and mode in ("recolte", "test") and methode_zones:
+        from auto import Surveillant
+
+        surveillant = Surveillant(cfg, recolteur, etat, lancer_scan)
+
+        if surveillant.disponible:
+            surveillant.start()
+            surveillant_actif["oui"] = True
+            log.info(
+                "🚶 Démarrage automatique ACTIF : changez de carte, la récolte "
+                "se lance seule (N reste disponible pour relancer)."
+            )
+
+        else:
+            log.warning(
+                "Démarrage automatique impossible : lecture des coordonnées "
+                "indisponible (brew install tesseract + pip install pytesseract). "
+                "Utilisez N."
+            )
+
+    # -------------------------------------------------------------------------
     # Boucle principale
     # -------------------------------------------------------------------------
 
@@ -671,6 +702,15 @@ def lancer_bot(cfg: dict, choix: dict):
         except Exception:
             log.exception(
                 "Erreur lors de l'arrêt du listener."
+            )
+
+        if surveillant is not None:
+            surveillant.arret.set()
+
+        if recolteur.stats.cartes:
+            log.info(
+                "📊 Session : %s",
+                recolteur.stats.resume(),
             )
 
         log.info(
@@ -1363,6 +1403,8 @@ def main():
                 "survol_en_test",
                 True,
             ),
+
+            "auto": cfg.get("circuit", {}).get("demarrage_auto", {}).get("actif", True),
         }
 
     else:

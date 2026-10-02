@@ -11,3 +11,4 @@ modeles/*.json
 *.pt
 memoire_cartes/
 circuit/
+stats/

@@ -79,20 +79,23 @@ def _fenetre(cfg: dict, defaut_test: bool) -> dict | None:
     survol = tk.BooleanVar(value=cfg["debug"].get("survol_en_test", True))
     ttk.Checkbutton(cadre, text="En test : survoler les points pour lire l'infobulle",
                     variable=survol).grid(row=fin_grille + 7, column=0, columnspan=3, sticky="w", padx=(20, 0))
+    auto = tk.BooleanVar(value=cfg.get("circuit", {}).get("demarrage_auto", {}).get("actif", True))
+    ttk.Checkbutton(cadre, text="Démarrage automatique : la récolte se lance à l'arrivée sur chaque carte (sans N)",
+                    variable=auto).grid(row=fin_grille + 8, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
     message = ttk.Label(cadre, text="", foreground="#b00")
-    message.grid(row=fin_grille + 8, column=0, columnspan=3, sticky="w")
+    message.grid(row=fin_grille + 9, column=0, columnspan=3, sticky="w")
 
     def lancer():
         choix = [cid for cid, v in variables.items() if v.get()]
         if not choix:
             message.config(text="Cochez au moins une céréale.")
             return
-        resultat.update(cereales=choix, mode=mode.get(), survol=survol.get())
+        resultat.update(cereales=choix, mode=mode.get(), survol=survol.get(), auto=auto.get())
         racine.destroy()
 
     actions = ttk.Frame(cadre)
-    actions.grid(row=fin_grille + 9, column=0, columnspan=3, sticky="e", pady=(10, 0))
+    actions.grid(row=fin_grille + 10, column=0, columnspan=3, sticky="e", pady=(10, 0))
     ttk.Button(actions, text="Annuler", command=racine.destroy).pack(side="left")
     ttk.Button(actions, text="Lancer", command=lancer).pack(side="left", padx=(6, 0))
     racine.bind("<Return>", lambda _e: lancer())
@@ -145,4 +148,6 @@ def _terminal(cfg: dict, defaut_test: bool) -> dict | None:
     m = input(f"Mode : p[h]otos / [p]oints / [t]est / [r]écolte (défaut {'test' if defaut_test else 'récolte'}) : "
               ).strip().lower()
     mode = {"h": "photo", "p": "points", "t": "test", "r": "recolte"}.get(m[:1], "test" if defaut_test else "recolte")
-    return {"cereales": choix, "mode": mode, "survol": cfg["debug"].get("survol_en_test", True)}
+    a = input("Démarrage automatique à l'arrivée sur chaque carte ? [O/n] : ").strip().lower()
+    return {"cereales": choix, "mode": mode, "survol": cfg["debug"].get("survol_en_test", True),
+            "auto": not a.startswith("n")}

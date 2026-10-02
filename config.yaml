@@ -36,6 +36,18 @@ circuit:
   verifier_infobulle: true
   # Passages : après la file, un 2e passage reclique les points encore « Faucher ».
   passes: 2
+  # Éditeur, touche S : propose les céréales oubliées (cellules qui ressemblent
+  # à vos points déjà posés). Plus haut = moins de propositions, plus sûres.
+  suggestions:
+    seuil: 0.62
+  # Démarrage automatique : la récolte se lance dès l'arrivée sur une nouvelle
+  # carte (coordonnées qui changent puis restent stables), sans appuyer sur N.
+  # Nécessite la lecture des coordonnées (Tesseract ou Apple Vision).
+  demarrage_auto:
+    actif: true                 # valeur par défaut de la case dans la fenêtre
+    intervalle: 0.5             # secondes entre deux lectures des coordonnées
+    lectures_stables: 2         # lectures identiques avant de démarrer
+    delai_arrivee: 0.6          # secondes d'attente avant les premiers clics
   # Céréale déjà dans la file de récolte (contour blanc + petite faux) : ni
   # survol ni clic. Mesure : part de pixels blancs autour du point, comparée à
   # la photo de la carte (céréales dans la file : 2 à 15 %, autres : ~0 %).
@@ -209,6 +221,9 @@ file_attente:
   # Plage HSV optionnelle de la surbrillance (null = désactivée).
   hsv_surbrillance: null        # ex. [[[0, 0, 240], [180, 40, 255]]]
   attente_demarrage: 1.0        # s avant la 1re vérification (le personnage démarre)
+  # Méthode points : fin de file détectée par le contour blanc des céréales cliquées.
+  attente_points: 0.3           # s avant la 1re vérification
+  intervalle_points: 0.35       # s entre deux vérifications
   intervalle_verif: 1.2         # secondes entre deux vérifications
   verifs_confirmation: 2        # vérifs consécutives sans surbrillance = fini
   timeout: 180                  # secondes max d'attente de la file
@@ -307,6 +322,11 @@ apprentissage:
   format_carte: jpg             # cartes entières : jpg (léger) ou png
   qualite_jpg: 92
   reutiliser_carte_secondes: 30 # même carte = un seul fichier
+
+# --- Statistiques --------------------------------------------------------------
+statistiques:
+  enregistrer: true
+  fichier: "stats/recoltes.csv" # une ligne par carte récoltée
 
 # --- Sons (macOS afplay) -----------------------------------------------------
 sons:
