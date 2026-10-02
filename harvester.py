@@ -33,6 +33,7 @@ from datetime import datetime
 from pathlib import Path
 
 import cv2
+import numpy as np
 
 import vision
 from apprentissage import Collecteur
@@ -383,6 +384,30 @@ class Recolteur:
         finally:
             capture.fermer()
 
+    def deja_en_file(self, capture: vision.Capture, souris: SourisHumaine, ident: str, z: dict
+                     ) -> tuple[bool, float, float]:
+        """La céréale du point est-elle déjà dans la file de récolte ?
+
+        Dans Dofus 3, une céréale déjà sélectionnée est entourée d'un contour
+        BLANC très marqué (avec une petite faux), alors qu'un simple survol ne
+        fait que l'éclaircir. On compare la part de pixels blancs autour du
+        point à celle de la photo de la carte. Le curseur est masqué.
+        Retourne (déjà dans la file ?, blanc actuel, blanc sur la photo)."""
+        cfg = self.cfg.get("circuit", {}).get("surbrillance", {})
+        if not cfg.get("actif", True):
+            return False, 0.0, 0.0
+        r = float(cfg.get("rayon", 22))
+        frame = capture.grab({"left": max(0, z["x"] - r), "top": max(0, z["y"] - r),
+                              "width": 2 * r, "height": 2 * r})
+        masque = np.full(frame.image.shape[:2], 255, np.uint8)
+        mx, my = souris.position()
+        x0, y0 = frame.vers_pixels(mx - 4, my - 4)
+        x1, y1 = frame.vers_pixels(mx + 24, my + 32)       # taille du curseur
+        masque[max(0, y0):max(0, y1), max(0, x0):max(0, x1)] = 0
+        actuel = vision.fraction_blanche(frame.image, masque)
+        base = self.circuit.blanc_photo(ident, z, r)
+        return actuel - base >= float(cfg.get("seuil", 0.008)), actuel, base
+
     def verdict_zone(self, capture: vision.Capture, souris: SourisHumaine, z: dict) -> tuple[str, str]:
         """Survole un point aléatoire de la zone et guette l'infobulle."""
         cfg_ib = self.cfg["infobulle"]
@@ -478,6 +503,11 @@ class Recolteur:
                     self.verifier_alertes(capture)
                 etiquette = (f"[{k}/{len(a_faire)}] point {i + 1}"
                              + (f" ({z['cereale']})" if z.get("cereale") else ""))
+                en_file, blanc, _ = self.deja_en_file(capture, souris, ident, z)
+                if en_file:
+                    log.info("  %s → déjà dans la file (surbrillance blanche %.0f %%), pas de clic",
+                             etiquette, 100 * blanc)
+                    continue
                 if verifier:
                     verdict, detail = self.verdict_zone(capture, souris, z)
                     if verdict == L.EPUISEE:
@@ -522,7 +552,11 @@ class Recolteur:
         compte = {"faucher": 0, "epuisee": 0, "inconnu": 0}
         for i, z in (self.ordre_zones(indexees, souris.position()) if survol else indexees):
             coul = (0, 200, 255)
-            if survol:
+            en_file, blanc, _ = self.deja_en_file(capture, souris, ident, z)
+            if en_file:
+                coul = (255, 0, 255)
+                log.info("  point %d → déjà dans la file (surbrillance blanche %.0f %%)", i + 1, 100 * blanc)
+            elif survol:
                 self.etat.controle()
                 verdict, detail = self.verdict_zone(capture, souris, z)
                 compte[verdict] = compte.get(verdict, 0) + 1
@@ -549,7 +583,8 @@ class Recolteur:
         log.info("══ Test %s : %d point(s)%s → %s/points.png", self.circuit.nom(ident), len(indexees),
                  f" — Faucher {compte['faucher']}, Épuisé {compte['epuisee']}, sans infobulle {compte['inconnu']}"
                  if survol else "", dossier)
-        log.info("   Vert = cliquerait, rouge = épuisé, bleu = pas d'infobulle (point mal placé ?), orange = non survolé.")
+        log.info("   Vert = cliquerait, rouge = épuisé, violet = déjà dans la file, bleu = pas d'infobulle "
+                 "(point mal placé ?), orange = non survolé.")
         self.sons.jouer("fin_carte")
 
     # --------------------------------------------------------------- récolte

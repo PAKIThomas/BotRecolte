@@ -36,6 +36,13 @@ circuit:
   verifier_infobulle: true
   # Passages : après la file, un 2e passage reclique les points encore « Faucher ».
   passes: 2
+  # Céréale déjà dans la file de récolte (contour blanc + petite faux) : ni
+  # survol ni clic. Mesure : part de pixels blancs autour du point, comparée à
+  # la photo de la carte (céréales dans la file : 2 à 15 %, autres : ~0 %).
+  surbrillance:
+    actif: true
+    rayon: 22                   # points autour du point de clic
+    seuil: 0.008                # écart minimal de pixels blancs (0,8 %)
   # Le bot clique pile sur chaque point (jitter_point: 0). Mettre 1 ou 2 pour
   # varier légèrement le point de clic (en points écran).
   jitter_point: 0
@@ -235,8 +242,8 @@ souris:
 delais:
   # Valeurs rapides mais toujours variables (côté humain). Pour ralentir,
   # augmentez les médianes.
-  entre_clics: {mediane: 0.05, sigma: 0.5, min: 0.02, max: 0.3}
-  apres_survol: {mediane: 0.015, sigma: 0.5, min: 0.005, max: 0.08}
+  entre_clics: {mediane: 0.15, sigma: 0.4, min: 0.08, max: 0.45}
+  apres_survol: {mediane: 0.04, sigma: 0.4, min: 0.02, max: 0.12}
   # Petites pauses irrégulières (probabilité par action).
   proba_micro_pause: 0.01
   micro_pause: {mediane: 0.6, sigma: 0.5, min: 0.25, max: 1.8}

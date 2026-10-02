@@ -200,6 +200,24 @@ class Circuit:
 
     # ----------------------------------------------------------------- zones
 
+    def blanc_photo(self, ident: str, z: dict, rayon: float) -> float:
+        """Part de pixels blancs autour du point sur la photo de la carte
+        (référence « sans surbrillance »). Gardée en cache."""
+        cle = (ident, round(z["x"], 1), round(z["y"], 1), rayon)
+        cache = self.__dict__.setdefault("_cache_blanc", {})
+        if cle not in cache:
+            valeur = 0.0
+            chemin = self.chemin_photo(ident, 0)
+            img = cv2.imread(str(chemin)) if chemin else None
+            if img is not None:
+                e = img.shape[1] / self.zone_jeu["width"]
+                cx, cy = (z["x"] - self.zone_jeu["left"]) * e, (z["y"] - self.zone_jeu["top"]) * e
+                r = rayon * e
+                roi = img[max(0, int(cy - r)):int(cy + r), max(0, int(cx - r)):int(cx + r)]
+                valeur = vision.fraction_blanche(roi)
+            cache[cle] = valeur
+        return cache[cle]
+
     def zones(self, ident: str | None, cereales: list[str] | None = None) -> list[dict]:
         zs = self.cartes.get(ident or "", {}).get("zones", [])
         if cereales is None:

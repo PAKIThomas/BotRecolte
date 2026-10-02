@@ -781,6 +781,22 @@ class DetecteurAlertes:
         return None
 
 
+def fraction_blanche(image_bgr: np.ndarray, masque: np.ndarray | None = None,
+                     sat_max: int = 45, val_min: int = 215) -> float:
+    """Part des pixels blancs (peu saturés, très lumineux). Dans Dofus 3, une
+    céréale déjà dans la file de récolte est entourée d'un contour blanc très
+    marqué ; une céréale dorée, du chaume ou de l'herbe n'en ont presque pas.
+    `masque` (uint8, 0 = ignoré) permet d'exclure le curseur."""
+    if image_bgr is None or image_bgr.size == 0:
+        return 0.0
+    hsv = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HSV)
+    blanc = (hsv[:, :, 1] < sat_max) & (hsv[:, :, 2] > val_min)
+    if masque is not None:
+        valides = masque > 0
+        return float(np.mean(blanc[valides])) if valides.any() else 0.0
+    return float(np.mean(blanc))
+
+
 def taux_mouvement(a: np.ndarray, b: np.ndarray, seuil_pixel: int = 25) -> float:
     """Fraction des pixels qui ont changé entre deux captures (réduites)."""
     pa = cv2.cvtColor(cv2.resize(a, None, fx=0.25, fy=0.25), cv2.COLOR_BGR2GRAY)

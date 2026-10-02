@@ -87,6 +87,7 @@ points sur la capture actuelle (`debug/<date>/points.png`) et, avec le
 survol, lit l'infobulle de chaque point, **sans cliquer** :
 - vert : cliquerait ;
 - rouge : épuisé ;
+- violet : déjà dans la file ;
 - bleu : pas d'infobulle, le point est sans doute mal placé.
 
 **3. Récolte.** Cochez les céréales voulues, mode « Récolte ». Sur chaque
@@ -94,7 +95,9 @@ carte, appuyez sur **N** :
 1. le bot lit les **coordonnées de la carte** (ex. « -28, -37 », en haut à
    gauche, sous le nom de la zone) et retrouve la carte photographiée à ces
    coordonnées. Si elles sont illisibles, il compare l'écran à vos photos ;
-2. il prend les points des céréales cochées, de proche en proche ;
+2. il prend les points des céréales cochées, de proche en proche. Une
+   céréale **déjà dans la file** (contour blanc très marqué et petite faux,
+   différent du simple survol) est ignorée : ni survol, ni clic ;
 3. pour chacun, il survole le point et clique **uniquement s'il lit
    « Faucher »**. « Épuisé » ou pas d'infobulle : pas de clic ;
 4. il attend la fin de la file, puis fait un 2ᵉ passage pour les points encore
