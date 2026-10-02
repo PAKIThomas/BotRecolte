@@ -13,6 +13,8 @@ Commandes :
   Z                  annule la dernière modification
   S                  propose les céréales oubliées (cercles pointillés) :
                      clic = accepter, clic droit = rejeter ; Maj+S = tout accepter
+  V                  affiche / masque les « vides » appris par le bot (croix grises) :
+                     clic droit sur une croix = l'oublier (c'était bien une céréale)
   G                  affiche / masque le quadrillage des cellules
   A                  aimant : chaque clic se place au centre de sa cellule
   Maj+flèches, + / - recaler le quadrillage s'il ne tombe pas sur celui du jeu
@@ -65,6 +67,7 @@ class EditeurPoints:
         self.zj = cfg["ecran"]["zone_jeu"]
         self.grille = Grille(cfg, self.circuit.dossier)
         self.suggestions: list[dict] = []
+        self.voir_vides = False
 
         self.racine = tk.Tk()
         self.racine.title("BotRecolte : points de clic")
@@ -200,6 +203,12 @@ class EditeurPoints:
         c = self.canvas
         c.delete("point")
         c.delete("suggestion")
+        c.delete("vide")
+        if self.voir_vides and self.ids:
+            for v in self.circuit.cartes[self.ids[self.index]].get("vides", []):
+                x, y = self._vers_canvas(v["x"], v["y"])
+                c.create_line(x - 5, y - 5, x + 5, y + 5, fill="#9e9e9e", width=2, tags=("vide",))
+                c.create_line(x - 5, y + 5, x + 5, y - 5, fill="#9e9e9e", width=2, tags=("vide",))
         for s_ in self.suggestions:
             x, y = self._vers_canvas(s_["x"], s_["y"])
             coul = self._couleur(s_["cereale"])
@@ -214,9 +223,12 @@ class EditeurPoints:
                 w, h = p["w"] * self.e * self.f / 2, p["h"] * self.e * self.f / 2
                 c.create_rectangle(x - w, y - h, x + w, y + h, outline=coul, width=1, dash=(3, 3), tags=("point",))
             # Cible : cercle + croix, le centre est le point de clic exact.
+            # Les points appris par le bot sont en pointillés.
             r = 7
+            appris = p.get("source") == "auto"
             c.create_oval(x - r, y - r, x + r, y + r, outline="#000", width=4, tags=("point",))
-            c.create_oval(x - r, y - r, x + r, y + r, outline=coul, width=2, tags=("point",))
+            c.create_oval(x - r, y - r, x + r, y + r, outline=coul, width=2,
+                          dash=(3, 2) if appris else None, tags=("point",))
             c.create_line(x - r - 4, y, x + r + 4, y, fill=coul, width=1, tags=("point",))
             c.create_line(x, y - r - 4, x, y + r + 4, fill=coul, width=1, tags=("point",))
             c.create_text(x + r + 2, y - r - 2, anchor="sw", fill=coul, font=("Helvetica", 10, "bold"),
@@ -230,12 +242,15 @@ class EditeurPoints:
         ident = self.ids[self.index]
         nb = len(self.circuit.cartes[ident].get("photos", []))
         sans = sum(1 for i in self.ids if not self.circuit.cartes[i].get("zones"))
+        appris = sum(1 for p in self.points if p.get("source") == "auto")
+        vides = len(self.circuit.cartes[ident].get("vides", []))
         nom = self.cfg["cereales"].get(self.cereales[self.courante], {}).get("nom", "?") if self.cereales else "?"
         self.info.config(text=(
             f"{self.circuit.nom(ident)}  —  carte {self.index + 1}/{len(self.ids)}  —  photo {self.photo_n + 1}/{nb}"
-            f"  —  {len(self.points)} point(s) de clic  —  cartes sans point : {sans}\n"
+            f"  —  {len(self.points)} point(s) de clic dont {appris} appris (pointillés), {vides} vide(s)"
+            f"  —  cartes sans point : {sans}\n"
             f"Céréale choisie : {nom} (1-9 pour changer)  |  clic = point de clic · clic droit = supprimer · "
-            f"C = changer la céréale du point · S = céréales oubliées · Z = annuler · G = quadrillage · "
+            f"C = changer la céréale du point · S = céréales oubliées · V = vides · Z = annuler · G = quadrillage · "
             f"A = aimant {'ACTIF' if self.grille.aimant else 'inactif'} · Tab = autre photo · R = renommer · "
             f"→/← = cartes · Suppr = supprimer la carte · Échap = quitter  (enregistrement automatique)"))
 
@@ -276,6 +291,15 @@ class EditeurPoints:
         self._enregistrer()
 
     def _supprimer_sous(self, e):
+        if self.voir_vides and self.ids:
+            vides = self.circuit.cartes[self.ids[self.index]].get("vides", [])
+            px, py = self._vers_ecran(e.x, e.y)
+            j = cible_sous(vides, px, py, rayon_point=9 / (self.e * self.f))
+            if j is not None:
+                del vides[j]
+                self.circuit.sauver()
+                self._dessiner()
+                return
         k = self._suggestion_sous(e.x, e.y)
         if k is not None:
             self.suggestions.pop(k)
@@ -306,6 +330,9 @@ class EditeurPoints:
             self.renommer()
         elif k == "s":
             self.basculer_suggestions()
+        elif k == "v":
+            self.voir_vides = not self.voir_vides
+            self._dessiner()
         elif k == "g":
             self.grille.visible = not self.grille.visible
             self._dessiner_grille()

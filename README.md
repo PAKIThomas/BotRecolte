@@ -79,6 +79,7 @@ avec Maj+flèches et + / - : le réglage est enregistré dans
 | clic droit | supprimer le point |
 | C | donner la céréale choisie au point sous le curseur |
 | Z | annuler |
+| V | afficher les vides appris (croix grises) : clic droit = retirer |
 | S | proposer les céréales oubliées (cercles pointillés) : clic = accepter, clic droit = rejeter |
 | Maj+S | accepter toutes les propositions |
 | G | afficher / masquer le quadrillage des cellules |
@@ -132,10 +133,37 @@ fauchées (par type), la durée et le total de la session. Une ligne par carte
 est ajoutée à `stats/recoltes.csv`. Le résumé de la session s'affiche quand
 vous quittez (Ctrl+C).
 
+**Détection des céréales sur la carte (apprise).** En plus de vos points, le
+bot cherche lui-même les céréales que vous n'avez pas pointées, à partir de
+tout ce qu'il a appris (`cellules.py`). Les céréales sont toujours posées sur
+une cellule de la grille : il compare donc chaque cellule de la carte à vos
+points (toutes cartes confondues), en couleur et en forme, et propose celles
+qui leur ressemblent. Ces cellules détectées passent par **la même règle** :
+survol, clic uniquement sur « Faucher ». Puis il apprend :
+- infobulle « Faucher » / « Épuisé » : la cellule devient un **point appris**
+  (céréale lue dans l'infobulle, sinon celle prévue). Une céréale non cochée
+  est apprise mais pas cliquée ;
+- pas d'infobulle : la cellule devient un **« vide »**, jamais resurvolé sur
+  cette carte, et qui sert d'exemple négatif partout ailleurs.
+
+Chaque passage rend donc le bot plus précis et plus rapide. Une carte jamais
+photographiée mais dont les coordonnées sont lisibles est ajoutée
+automatiquement au circuit et récoltée par détection. Le mode Test apprend
+aussi (sans cliquer) : faites-le une fois sur chaque carte pour accélérer
+l'apprentissage. Dans l'éditeur, les points appris sont en **pointillés**
+(vérifiez-les, clic droit pour supprimer une erreur) et la touche **V**
+affiche les vides (croix grises, clic droit pour en retirer un).
+
+Réglages (`circuit.detection`) : `actif`, `seuil` (0,62 ; plus haut = moins
+de propositions), `marge_vides`, `max_par_carte`, `cartes_inconnues`,
+`lire_nom` (nom de la céréale lu dans l'infobulle, nécessite Tesseract),
+`apprendre`.
+
 Le clic tombe **pile** sur votre point (`circuit.jitter_point: 0` ; 1 ou 2
 pour varier légèrement). Si les infobulles ne peuvent pas être lues (pas
 d'image dans `assets/infobulles/faucher/`), le bot s'arrête au lieu de
-cliquer. Une carte inconnue arrête aussi le bot, avec un message.
+cliquer. Une carte inconnue sans coordonnées lisibles arrête le bot, avec un
+message (avec le démarrage automatique, elle est simplement ignorée).
 
 **Lecture des coordonnées.** Installez l'un de ces deux moteurs (sinon, le bot
 reconnaît les cartes uniquement par l'image) :
@@ -415,6 +443,7 @@ points et dessine `zone_jeu` (vert) et `zones_exclues` (rouge) dans
 | `vision.py` | capture mss, détecteur HSV + template (interchangeable), infobulles, surbrillance, alertes, annotation |
 | `mouse.py` | souris humaine : Bézier bruitées, profil de vitesse, dépassement, délais log-normaux |
 | `circuit.py` | cartes photographiées, reconnaissance de la carte, points de clic |
+| `cellules.py` | détection des céréales par cellule, apprise des points et des infobulles |
 | `editeur_points.py` | éditeur des points de clic (`python main.py points`) |
 | `harvester.py` | boucle de récolte (points ou détection), file d'attente, mode test |
 | `auto.py` | démarrage automatique à l'arrivée sur une carte |

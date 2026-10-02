@@ -37,10 +37,12 @@ class Statistiques:
         for c, n in bilan["par_cereale"].items():
             self.par_cereale[c] = self.par_cereale.get(c, 0) + n
         session_min = (time.monotonic() - self.debut) / 60
-        log.info("📊 %s : %d fauchée(s)%s en %.0f s  |  session : %d carte(s), %d céréale(s) en %.0f min",
+        appris = (f", {bilan['appris']} point(s) appris" if bilan.get("appris") else "") + \
+                 (f", {bilan['vides']} vide(s) appris" if bilan.get("vides") else "")
+        log.info("📊 %s : %d fauchée(s)%s en %.0f s%s  |  session : %d carte(s), %d céréale(s) en %.0f min",
                  carte, bilan["fauchees"],
                  f" ({self._detail(bilan['par_cereale'])})" if bilan["par_cereale"] else "",
-                 duree, self.cartes, self.fauchees, session_min)
+                 duree, appris, self.cartes, self.fauchees, session_min)
         if not self.c.get("enregistrer", True):
             return
         try:

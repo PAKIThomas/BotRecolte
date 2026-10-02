@@ -710,6 +710,27 @@ class LecteurInfobulle:
             return self.INCONNU, f"OCR : {resume!r}"
         return self.INCONNU, f"scores faucher={s_f:.2f} épuisée={s_e:.2f}"
 
+    def lire_nom(self, frame: Frame, cereales: dict) -> str | None:
+        """Nom de la céréale écrit dans l'infobulle (« Blé », « Orge »…), lu par
+        Tesseract. Retourne l'identifiant (ble, orge…) ou None."""
+        try:
+            import pytesseract
+        except ImportError:
+            return None
+        hsv = cv2.cvtColor(frame.image, cv2.COLOR_BGR2HSV)
+        texte_clair = (hsv[:, :, 2] > 170) & (hsv[:, :, 1] < 90)      # texte blanc de l'infobulle
+        img = 255 - texte_clair.astype(np.uint8) * 255
+        if frame.echelle < 2:
+            img = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_NEAREST)
+        try:
+            mots = set(re.findall(r"[a-z]+", _normaliser(pytesseract.image_to_string(img, config="--psm 11"))))
+        except Exception:
+            return None
+        for cid, c in cereales.items():
+            if _normaliser(c.get("nom", cid)) in mots:
+                return cid
+        return None
+
     def _langue(self) -> str:
         try:
             return "fra" if "fra" in self._ocr.get_languages() else "eng"

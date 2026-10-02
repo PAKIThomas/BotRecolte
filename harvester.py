@@ -37,6 +37,7 @@ import numpy as np
 
 import vision
 from apprentissage import Collecteur
+from cellules import DetecteurCellules
 from circuit import Circuit, est_point, point_de_clic
 from ia import DetecteurIA, EnregistreurCartes
 from memoire import MemoireCartes
@@ -76,11 +77,13 @@ class Recolteur:
         self.coords_traitees: str | None = None   # coordonnées de la dernière carte traitée
         self.stats = Statistiques(cfg)
         self.dernier_point: tuple[float, float] = (0.0, 0.0)
+        self.derniere_infobulle: vision.Frame | None = None
         # Délai d'apparition de l'infobulle, appris au fil des survols.
         self._delais_infobulle: list[float] = []
         self.detecteur = None
         if self.methode == "zones" or self.mode == "photo":
             self.circuit = Circuit(cfg)
+            self.cellules = DetecteurCellules(cfg, self.circuit)
             self.memoire = MemoireCartes(dict(cfg, memoire={"actif": False}))
             log.info("Circuit : %s", self.circuit.resume())
         else:
@@ -436,7 +439,8 @@ class Recolteur:
             souris.dormir(cfg_ib.get("delai_min", 0.06) * random.uniform(0.8, 1.3))
             limite = debut + self.delai_max_infobulle()
             while True:
-                verdict, detail = self.infobulle.lire(capture.grab_autour(px, py, cfg_ib["zone"]))
+                self.derniere_infobulle = capture.grab_autour(px, py, cfg_ib["zone"])
+                verdict, detail = self.infobulle.lire(self.derniere_infobulle)
                 if verdict != L.INCONNU or time.monotonic() >= limite:
                     break
                 souris.dormir(cfg_ib.get("intervalle_lecture", 0.04))
@@ -476,6 +480,19 @@ class Recolteur:
         self.verifier_alertes(capture, frame)
         ident, score, pourquoi = self.circuit.reconnaitre(frame)
         self.coords_traitees = self.circuit.dernieres_coords
+        cfg_d = cfg_c.get("detection", {})
+        detection = cfg_d.get("actif", True)
+        if detection:
+            exemples = self.cellules.construire()
+            log.debug("Détection : exemples %s", exemples)
+        if (not ident and detection and cfg_d.get("cartes_inconnues", True) and self.cellules.pret
+                and self.circuit.dernieres_coords):
+            # Carte jamais photographiée : on l'ajoute au circuit et on cherche
+            # ses céréales par détection. Elle s'enrichit à chaque passage.
+            ident, _, _ = self.circuit.photographier(frame)
+            score, pourquoi = 1.0, "nouvelle carte ajoutée automatiquement"
+            log.info("🗺  Nouvelle carte %s ajoutée au circuit : céréales cherchées par détection.",
+                     self.circuit.nom(ident))
         if not ident and self.auto:
             # Démarrage automatique : une carte de passage (non photographiée)
             # n'est pas une erreur, on attend simplement la suivante.
@@ -488,16 +505,24 @@ class Recolteur:
             raise ArretBot(f"carte non reconnue ({pourquoi}). Photographiez-la (mode Photos) "
                            "puis placez ses points de clic (python main.py points)")
         self.carte_id = ident
-        indexees = [(i, z) for i, z in enumerate(self.circuit.zones(ident))
+        indexees = [(("p", i), z) for i, z in enumerate(self.circuit.zones(ident))
                     if not z.get("cereale") or z["cereale"] in self.cereales]
-        log.info("🗺  Carte reconnue : %s (par %s, ressemblance %.0f %%) — %d point(s) de clic.",
-                 self.circuit.nom(ident), pourquoi, 100 * score, len(indexees))
+        nb_points = len(indexees)
+        lire_nom = cfg_d.get("lire_nom", True)
+        if detection and self.cellules.pret and cfg_c.get("verifier_infobulle", True):
+            for k, d in enumerate(self.cellules.detecter(frame, ident)):
+                # Céréale prévue cochée, ou nom lu dans l'infobulle avant de cliquer.
+                if d["cereale"] in self.cereales or lire_nom:
+                    indexees.append((("d", k), d))
+        log.info("🗺  Carte reconnue : %s (par %s, ressemblance %.0f %%) — %d point(s) de clic%s.",
+                 self.circuit.nom(ident), pourquoi, 100 * score, nb_points,
+                 f" + {len(indexees) - nb_points} cellule(s) détectée(s)" if len(indexees) > nb_points else "")
         if not indexees:
             if self.auto:
                 log.info("   Aucun point pour les céréales cochées sur cette carte : rien à faire.")
                 return
-            raise ArretBot(f"aucun point de clic (pour les céréales choisies) sur {self.circuit.nom(ident)} : "
-                           "placez-les avec python main.py points")
+            raise ArretBot(f"aucun point de clic ni céréale détectée (pour les céréales choisies) sur "
+                           f"{self.circuit.nom(ident)} : placez des points avec python main.py points")
         # Règle : clic UNIQUEMENT si l'infobulle « Faucher » est lue ; jamais
         # sur « Épuisé », jamais sans infobulle lisible.
         verifier = cfg_c.get("verifier_infobulle", True)
@@ -532,8 +557,8 @@ class Recolteur:
                 self.verifier_premier_plan()
                 if cfg_s.get("alertes_avant_chaque_clic", True):
                     self.verifier_alertes(capture)
-                etiquette = (f"[{k}/{len(a_faire)}] point {i + 1}"
-                             + (f" ({z['cereale']})" if z.get("cereale") else ""))
+                etiquette = (f"[{k}/{len(a_faire)}] {self.nom_cible(i)}"
+                             + (f" ({z['cereale']}{' ?' if z.get('auto') else ''})" if z.get("cereale") else ""))
                 en_file, blanc, _ = self.deja_en_file(capture, souris, ident, z)
                 if en_file:
                     confirmes.add(i)
@@ -541,9 +566,20 @@ class Recolteur:
                     log.info("  %s → déjà dans la file (surbrillance blanche %.0f %%), pas de clic",
                              etiquette, 100 * blanc)
                     continue
+                if z.get("auto") and not verifier:
+                    continue                         # jamais de clic à l'aveugle sur une détection
                 if verifier:
                     verdict, detail = self.verdict_zone(capture, souris, z)
-                    if verdict == L.EPUISEE:
+                    if z.get("auto"):
+                        cliquer = self.apprendre_detection(ident, z, verdict, bilan)
+                        if verdict == L.EPUISEE:
+                            epuisees.add(i)
+                            bilan["epuisees"] += 1
+                            log.info("  %s → Épuisé ✘ (appris)", etiquette)
+                            continue
+                        if not cliquer:
+                            continue
+                    elif verdict == L.EPUISEE:
                         epuisees.add(i)
                         bilan["epuisees"] += 1
                         illisibles = 0
@@ -592,6 +628,38 @@ class Recolteur:
         log.info("✔ Carte terminée en %.0f s.%s", duree,
                  "" if self.auto else " Changez de carte puis appuyez sur la touche scanner.")
         self.sons.jouer("fin_carte")
+
+    def nom_cible(self, i) -> str:
+        return f"point {i[1] + 1}" if i[0] == "p" else f"détection {i[1] + 1}"
+
+    def apprendre_detection(self, ident: str, z: dict, verdict: str, bilan: dict) -> bool:
+        """Cellule détectée survolée : on apprend ce qu'elle est. Retourne True
+        s'il faut cliquer (« Faucher » sur une céréale cochée)."""
+        L = vision.LecteurInfobulle
+        apprendre = self.cfg.get("circuit", {}).get("detection", {}).get("apprendre", True)
+        if verdict not in (L.FAUCHER, L.EPUISEE):
+            if apprendre:
+                self.circuit.apprendre_vide(ident, z["x"], z["y"])
+                bilan["vides"] = bilan.get("vides", 0) + 1
+            log.info("  détection en (%.0f, %.0f) → pas de céréale (vide appris)", z["x"], z["y"])
+            return False
+        nom = None
+        if self.cfg.get("circuit", {}).get("detection", {}).get("lire_nom", True) and self.derniere_infobulle:
+            nom = self.infobulle.lire_nom(self.derniere_infobulle, self.cfg["cereales"])
+        if nom:
+            z["cereale"] = nom
+        if apprendre:
+            self.circuit.apprendre_point(ident, z["x"], z["y"], z["cereale"])
+            bilan["appris"] = bilan.get("appris", 0) + 1
+        nom_affiche = self.cfg["cereales"].get(z["cereale"], {}).get("nom", z["cereale"])
+        if verdict == L.FAUCHER and z["cereale"] not in self.cereales:
+            log.info("  détection en (%.0f, %.0f) → %s, non cochée : pas de clic (point appris)",
+                     z["x"], z["y"], nom_affiche)
+            return False
+        if verdict == L.FAUCHER:
+            log.info("  détection en (%.0f, %.0f) → %s%s, nouveau point appris",
+                     z["x"], z["y"], nom_affiche, " (nom lu)" if nom else " (prévu)")
+        return verdict == L.FAUCHER
 
     def attendre_fin_points(self, capture: vision.Capture, souris: SourisHumaine, ident: str,
                             cliques: list[tuple[int, dict]], confirmes: set[int]):
@@ -643,13 +711,18 @@ class Recolteur:
             en_file, blanc, _ = self.deja_en_file(capture, souris, ident, z)
             if en_file:
                 coul = (255, 0, 255)
-                log.info("  point %d → déjà dans la file (surbrillance blanche %.0f %%)", i + 1, 100 * blanc)
+                log.info("  %s → déjà dans la file (surbrillance blanche %.0f %%)", self.nom_cible(i), 100 * blanc)
             elif survol:
                 self.etat.controle()
                 verdict, detail = self.verdict_zone(capture, souris, z)
                 compte[verdict] = compte.get(verdict, 0) + 1
+                if z.get("auto"):
+                    # Le mode test apprend aussi (aucun clic) : bon moyen d'entraîner le bot.
+                    if not self.apprendre_detection(ident, z, verdict, {}) and verdict == L.FAUCHER:
+                        verdict = "non_cochee"
                 coul = {L.FAUCHER: (0, 220, 0), L.EPUISEE: (0, 0, 255)}.get(verdict, (255, 120, 0))
-                log.info("  point %d → %s", i + 1, {L.FAUCHER: "Faucher (CLIQUERAIT)", L.EPUISEE: "Épuisé"}.get(
+                log.info("  %s → %s", self.nom_cible(i), {L.FAUCHER: "Faucher (CLIQUERAIT)", L.EPUISEE: "Épuisé",
+                                                           "non_cochee": "céréale non cochée"}.get(
                     verdict, f"pas d'infobulle ({detail})"))
             ep = max(1, int(frame.echelle))
             if est_point(z):
@@ -663,7 +736,8 @@ class Recolteur:
                 x0, y0 = frame.vers_pixels(z["x"] - z["w"] / 2, z["y"] - z["h"] / 2)
                 x1, y1 = frame.vers_pixels(z["x"] + z["w"] / 2, z["y"] + z["h"] / 2)
                 cv2.rectangle(img, (x0, y0), (x1, y1), coul, ep)
-            cv2.putText(img, str(i + 1), (x0, max(10, y0 - 3)), cv2.FONT_HERSHEY_SIMPLEX, 0.4 * frame.echelle,
+            cv2.putText(img, ("" if i[0] == "p" else "d") + str(i[1] + 1), (x0, max(10, y0 - 3)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4 * frame.echelle,
                         coul, max(1, int(frame.echelle / 2)))
         if survol:
             self.eloigner_souris(souris)

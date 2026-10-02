@@ -36,6 +36,20 @@ circuit:
   verifier_infobulle: true
   # Passages : après la file, un 2e passage reclique les points encore « Faucher ».
   passes: 2
+  # Détection des céréales par cellule (apprise de vos points et des infobulles) :
+  # sur chaque carte, le bot cherche aussi les céréales sans point de clic.
+  # Rien n'est cliqué sans « Faucher ». Une cellule détectée qui donne une
+  # infobulle devient un point (appris) ; sans infobulle, elle devient un
+  # « vide » et n'est plus jamais survolée sur cette carte.
+  detection:
+    actif: true
+    cartes_inconnues: true      # carte jamais photographiée : ajoutée au circuit + détection
+    lire_nom: true              # lit le nom de la céréale dans l'infobulle (Tesseract)
+    apprendre: true             # enregistre points appris et vides
+    seuil: 0.62                 # ressemblance minimale avec vos points (0..1)
+    marge_vides: 0.06           # écartée si nettement plus proche d'un vide
+    rayon: 18                   # taille analysée autour du centre de la cellule (points)
+    max_par_carte: 40           # nombre max de cellules détectées survolées par carte
   # Éditeur, touche S : propose les céréales oubliées (cellules qui ressemblent
   # à vos points déjà posés). Plus haut = moins de propositions, plus sûres.
   suggestions:

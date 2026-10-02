@@ -235,6 +235,21 @@ class Circuit:
             self.cartes[ident]["zones"].append(nouveau_point(px, py, cereale))
             self.sauver()
 
+    def apprendre_point(self, ident: str, px: float, py: float, cereale: str):
+        """Point appris par le bot (infobulle lue sur une cellule détectée)."""
+        with self._verrou:
+            p = nouveau_point(px, py, cereale)
+            p["source"] = "auto"
+            self.cartes[ident].setdefault("zones", []).append(p)
+            self.sauver()
+
+    def apprendre_vide(self, ident: str, px: float, py: float):
+        """Cellule survolée sans infobulle : jamais plus proposée sur cette carte,
+        et exemple de « pas une céréale » pour le détecteur."""
+        with self._verrou:
+            self.cartes[ident].setdefault("vides", []).append({"x": round(px, 1), "y": round(py, 1)})
+            self.sauver()
+
     def retirer_zone(self, ident: str, px: float, py: float) -> bool:
         """Retire le point ou la zone sous (px, py) (Maj+E)."""
         with self._verrou:
