@@ -12,4 +12,7 @@ ultralytics>=8.3
 # Optionnels
 # pyobjc-framework-Cocoa>=10.0   # détection plus rapide de l'app au premier plan (AppKit)
 # pytesseract>=0.3.10            # lecture des coordonnées de la carte (+ brew install tesseract)
-# pyobjc-framework-Vision>=10.0  # ou : lecture des coordonnées par Apple Vision (sans brew)
+
+# Lecture des noms de céréales (touche K) et des coordonnées : Apple Vision,
+# intégré à macOS (pas besoin de Homebrew).
+pyobjc-framework-Vision>=10.0; sys_platform == "darwin"

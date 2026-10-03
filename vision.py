@@ -625,6 +625,60 @@ def _normaliser(txt: str) -> str:
     return "".join(ch for ch in txt if not unicodedata.combining(ch))
 
 
+_MOTEUR_OCR: list = []
+
+
+def moteur_ocr() -> str | None:
+    """Moteur de lecture de texte disponible : « tesseract » (brew install
+    tesseract + pip install pytesseract), sinon « vision » (Apple Vision,
+    intégré à macOS : pip install pyobjc-framework-Vision), sinon None."""
+    if not _MOTEUR_OCR:
+        choix = None
+        try:
+            import pytesseract
+            pytesseract.get_tesseract_version()
+            choix = "tesseract"
+        except Exception:
+            try:
+                import importlib
+                importlib.import_module("Quartz")       # pyobjc
+                importlib.import_module("Vision")
+                choix = "vision"
+            except Exception:
+                pass
+        _MOTEUR_OCR.append(choix)
+    return _MOTEUR_OCR[0]
+
+
+def lire_texte(img: np.ndarray, moteur: str, config: str = "--psm 11") -> str:
+    """Texte contenu dans l'image, avec le moteur donné."""
+    if moteur == "tesseract":
+        import pytesseract
+        return pytesseract.image_to_string(img, config=config)
+    return lire_texte_apple(img)
+
+
+def lire_texte_apple(img: np.ndarray, langues: tuple[str, ...] = ("fr-FR", "en-US")) -> str:
+    """OCR Apple Vision (macOS), sans installation de Tesseract."""
+    import Quartz
+    import Vision
+    from Foundation import NSData
+    ok, png = cv2.imencode(".png", img)
+    donnees = NSData.dataWithBytes_length_(png.tobytes(), len(png))
+    source = Quartz.CGImageSourceCreateWithData(donnees, None)
+    image = Quartz.CGImageSourceCreateImageAtIndex(source, 0, None)
+    requete = Vision.VNRecognizeTextRequest.alloc().init()
+    requete.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
+    requete.setUsesLanguageCorrection_(False)
+    try:
+        requete.setRecognitionLanguages_(list(langues))
+    except Exception:
+        pass
+    gestionnaire = Vision.VNImageRequestHandler.alloc().initWithCGImage_options_(image, None)
+    gestionnaire.performRequests_error_([requete], None)
+    return " ".join(str(obs.topCandidates_(1)[0].string()) for obs in (requete.results() or []))
+
+
 class LecteurInfobulle:
     """Lit l'infobulle affichée au survol : template matching sur
     assets/infobulles/{faucher,epuisee}/, OCR (pytesseract) en repli."""
@@ -738,26 +792,31 @@ class LecteurInfobulle:
 
     def lire_nom(self, frame: Frame, cereales: dict) -> str | None:
         """Nom de la céréale écrit dans l'infobulle (« Blé », « Orge »…), lu par
-        Tesseract. Retourne l'identifiant (ble, orge…) ou None."""
-        try:
-            import pytesseract
-        except ImportError:
+        Tesseract ou, à défaut, par Apple Vision (intégré à macOS). Retourne
+        l'identifiant (ble, orge…) ou None."""
+        moteur = moteur_ocr()
+        if moteur is None:
             return None
         noms = {cid: _normaliser(c.get("nom", cid)) for cid, c in cereales.items()}
-        hsv = cv2.cvtColor(frame.image, cv2.COLOR_BGR2HSV)
-        gris = cv2.cvtColor(frame.image, cv2.COLOR_BGR2GRAY)
-        # 1) texte clair (blanc, ou coloré mais lumineux) ; 2) gris inversé.
-        versions = [255 - ((hsv[:, :, 2] > 170) & (hsv[:, :, 1] < 90)).astype(np.uint8) * 255,
-                    255 - ((hsv[:, :, 2] > 150)).astype(np.uint8) * 255,
-                    255 - gris]
+        if moteur == "tesseract":
+            hsv = cv2.cvtColor(frame.image, cv2.COLOR_BGR2HSV)
+            gris = cv2.cvtColor(frame.image, cv2.COLOR_BGR2GRAY)
+            # 1) texte blanc ; 2) texte clair (même coloré) ; 3) gris inversé.
+            versions = [255 - ((hsv[:, :, 2] > 170) & (hsv[:, :, 1] < 90)).astype(np.uint8) * 255,
+                        255 - ((hsv[:, :, 2] > 150)).astype(np.uint8) * 255,
+                        255 - gris]
+        else:
+            versions = [frame.image]        # Apple Vision lit très bien l'image en couleur
         tous: list[str] = []
         for img in versions:
             if frame.echelle < 2:
                 img = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
             try:
-                mots = re.findall(r"[a-z]+", _normaliser(pytesseract.image_to_string(img, config="--psm 11")))
+                texte = lire_texte(img, moteur)
             except Exception:
+                log.debug("Lecture du nom impossible", exc_info=True)
                 return None
+            mots = re.findall(r"[a-z]+", _normaliser(texte))
             for cid, nom in noms.items():
                 if nom in mots:
                     return cid

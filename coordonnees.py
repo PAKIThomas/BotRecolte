@@ -69,20 +69,7 @@ class LecteurCoordonnees:
 
     @staticmethod
     def _vision_apple(img: np.ndarray) -> str:
-        import Quartz
-        import Vision
-        from Foundation import NSData
-        ok, png = cv2.imencode(".png", img)
-        donnees = NSData.dataWithBytes_length_(png.tobytes(), len(png))
-        source = Quartz.CGImageSourceCreateWithData(donnees, None)
-        image = Quartz.CGImageSourceCreateImageAtIndex(source, 0, None)
-        requete = Vision.VNRecognizeTextRequest.alloc().init()
-        requete.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
-        requete.setUsesLanguageCorrection_(False)
-        gestionnaire = Vision.VNImageRequestHandler.alloc().initWithCGImage_options_(image, None)
-        gestionnaire.performRequests_error_([requete], None)
-        textes = [obs.topCandidates_(1)[0].string() for obs in (requete.results() or [])]
-        return " ".join(str(t) for t in textes)
+        return vision.lire_texte_apple(img, langues=("en-US",))
 
     # -------------------------------------------------------------- lecture
 

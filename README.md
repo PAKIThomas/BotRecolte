@@ -70,8 +70,9 @@ bonne céréale. Une carte pas encore photographiée l'est automatiquement.
 - P met en pause, W arrête. À la fin : bilan dans le terminal et image
   `debug/<date>/balayage.png` (vert = nouveaux points).
 
-Lecture des noms : Tesseract nécessaire (`brew install tesseract`,
-`pip install pytesseract`). Si K ouvre une fenêtre dans Dofus, changez la
+Lecture des noms : **Apple Vision**, intégré à macOS, installé par
+`pip install -r requirements.txt` (pas besoin de Homebrew). Tesseract est
+utilisé à la place s'il est installé. Si K ouvre une fenêtre dans Dofus, changez la
 touche dans `config.yaml > raccourcis > balayer` (ex. `"shift+k"`).
 
 **Retirer des points.** Dans l'éditeur (`python main.py points`) : clic droit
@@ -200,8 +201,9 @@ message (avec le démarrage automatique, elle est simplement ignorée).
 
 **Lecture des coordonnées.** Installez l'un de ces deux moteurs (sinon, le bot
 reconnaît les cartes uniquement par l'image) :
-- `brew install tesseract` puis `pip install pytesseract` (testé) ;
-- ou `pip install pyobjc-framework-Vision` (Apple Vision, intégré à macOS).
+- `pip install pyobjc-framework-Vision` (Apple Vision, intégré à macOS,
+  inclus dans requirements.txt, sans Homebrew) ;
+- ou `brew install tesseract` puis `pip install pytesseract`.
 
 En mode Photos, le terminal affiche les coordonnées lues, par exemple
 `carte_002 [-28,-37]`. Les cartes photographiées avant reçoivent leurs

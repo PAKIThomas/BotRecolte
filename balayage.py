@@ -176,6 +176,12 @@ class Balayeur:
         if not self.infobulle.operationnel:
             from harvester import ArretBot
             raise ArretBot("impossible de lire les infobulles (aucune image dans assets/infobulles/)")
+        moteur = vision.moteur_ocr()
+        if moteur is None:
+            from harvester import ArretBot
+            raise ArretBot("impossible de lire le nom des céréales : installez Apple Vision avec "
+                           "« pip install pyobjc-framework-Vision » (ou Tesseract)")
+        log.info("   Lecture des noms : %s.", "Tesseract" if moteur == "tesseract" else "Apple Vision")
         debut = time.monotonic()
         r.verifier_premier_plan()
         # Image de référence prise souris hors des céréales (sur le bandeau du
