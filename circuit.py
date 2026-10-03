@@ -243,6 +243,29 @@ class Circuit:
             self.cartes[ident].setdefault("zones", []).append(p)
             self.sauver()
 
+    def ajouter_balayage(self, ident: str, points: list[dict]):
+        """Points trouvés par le balayage (touche K) : source « balayage »,
+        avec la position de leur infobulle (`ancre`) pour ne jamais ajouter
+        deux fois la même céréale lors d'un prochain balayage."""
+        with self._verrou:
+            zs = self.cartes[ident].setdefault("zones", [])
+            for p in points:
+                z = nouveau_point(p["x"], p["y"], p.get("cereale") or "")
+                z["source"] = "balayage"
+                if p.get("ancre"):
+                    z["ancre"] = [round(p["ancre"][0], 1), round(p["ancre"][1], 1)]
+                zs.append(z)
+            self.sauver()
+
+    def noter_ancres(self, ident: str, ancres: dict[int, tuple[float, float]]):
+        """Mémorise la position de l'infobulle de points existants."""
+        with self._verrou:
+            zs = self.cartes[ident].get("zones", [])
+            for i, a in ancres.items():
+                if i < len(zs):
+                    zs[i]["ancre"] = [round(a[0], 1), round(a[1], 1)]
+            self.sauver()
+
     def apprendre_vide(self, ident: str, px: float, py: float):
         """Cellule survolée sans infobulle : jamais plus proposée sur cette carte,
         et exemple de « pas une céréale » pour le détecteur."""

@@ -223,16 +223,16 @@ class EditeurPoints:
                 w, h = p["w"] * self.e * self.f / 2, p["h"] * self.e * self.f / 2
                 c.create_rectangle(x - w, y - h, x + w, y + h, outline=coul, width=1, dash=(3, 3), tags=("point",))
             # Cible : cercle + croix, le centre est le point de clic exact.
-            # Les points appris par le bot sont en pointillés.
+            # Les points posés par le bot (balayage K, apprentissage) sont en pointillés.
             r = 7
-            appris = p.get("source") == "auto"
+            appris = p.get("source") in ("auto", "balayage")
             c.create_oval(x - r, y - r, x + r, y + r, outline="#000", width=4, tags=("point",))
             c.create_oval(x - r, y - r, x + r, y + r, outline=coul, width=2,
                           dash=(3, 2) if appris else None, tags=("point",))
             c.create_line(x - r - 4, y, x + r + 4, y, fill=coul, width=1, tags=("point",))
             c.create_line(x, y - r - 4, x, y + r + 4, fill=coul, width=1, tags=("point",))
             c.create_text(x + r + 2, y - r - 2, anchor="sw", fill=coul, font=("Helvetica", 10, "bold"),
-                          text=str(i + 1), tags=("point",))
+                          text=str(i + 1) + ("" if p.get("cereale") else " ?"), tags=("point",))
         self._legende()
         self._maj_info()
 
@@ -242,15 +242,18 @@ class EditeurPoints:
         ident = self.ids[self.index]
         nb = len(self.circuit.cartes[ident].get("photos", []))
         sans = sum(1 for i in self.ids if not self.circuit.cartes[i].get("zones"))
-        appris = sum(1 for p in self.points if p.get("source") == "auto")
+        appris = sum(1 for p in self.points if p.get("source") in ("auto", "balayage"))
+        sans_nom = sum(1 for p in self.points if not p.get("cereale"))
         vides = len(self.circuit.cartes[ident].get("vides", []))
         nom = self.cfg["cereales"].get(self.cereales[self.courante], {}).get("nom", "?") if self.cereales else "?"
         self.info.config(text=(
             f"{self.circuit.nom(ident)}  —  carte {self.index + 1}/{len(self.ids)}  —  photo {self.photo_n + 1}/{nb}"
-            f"  —  {len(self.points)} point(s) de clic dont {appris} appris (pointillés), {vides} vide(s)"
+            f"  —  {len(self.points)} point(s) de clic dont {appris} posé(s) par le bot (pointillés)"
+            f"{f', {sans_nom} sans céréale (?)' if sans_nom else ''}{f', {vides} vide(s)' if vides else ''}"
             f"  —  cartes sans point : {sans}\n"
             f"Céréale choisie : {nom} (1-9 pour changer)  |  clic = point de clic · clic droit = supprimer · "
-            f"C = changer la céréale du point · S = céréales oubliées · V = vides · Z = annuler · G = quadrillage · "
+            f"C = changer la céréale du point · X = retirer les points du balayage · S = céréales oubliées · "
+            f"V = vides · Z = annuler · G = quadrillage · "
             f"A = aimant {'ACTIF' if self.grille.aimant else 'inactif'} · Tab = autre photo · R = renommer · "
             f"→/← = cartes · Suppr = supprimer la carte · Échap = quitter  (enregistrement automatique)"))
 
@@ -325,6 +328,14 @@ class EditeurPoints:
             if i is not None and self.cereales:
                 self._memoriser()
                 self.points[i]["cereale"] = self.cereales[self.courante]
+                self._enregistrer()
+        elif k == "x":
+            # Retire tous les points posés par le balayage (K) sur cette carte ;
+            # Z pour annuler.
+            garder = [p for p in self.points if p.get("source") not in ("auto", "balayage")]
+            if len(garder) < len(self.points):
+                self._memoriser()
+                self.points = garder
                 self._enregistrer()
         elif k == "r":
             self.renommer()

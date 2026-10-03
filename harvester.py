@@ -128,15 +128,23 @@ class Recolteur:
 
     # ------------------------------------------------------------------ entrée
 
-    def executer(self, auto: bool = False):
+    def executer(self, auto: bool = False, action: str = "recolte"):
         """Appelé dans un thread à chaque appui sur la touche « scanner », ou
-        par le démarrage automatique (auto=True) à l'arrivée sur une carte."""
+        par le démarrage automatique (auto=True) à l'arrivée sur une carte.
+        action="balayage" (touche K) : survole toute la carte et pose les
+        points de clic tout seul, sans jamais cliquer."""
         self.auto = auto
         capture = vision.Capture(self.cfg)   # une instance mss par thread
-        souris = None if self.mode == "photo" else SourisHumaine(
-            self.cfg, controle=self.etat.controle, simulation=self.mode_test)
+        balayage = action == "balayage"
+        souris = None if self.mode == "photo" and not balayage else SourisHumaine(
+            self.cfg, controle=self.etat.controle, simulation=self.mode_test or balayage)
         try:
-            if self.mode == "photo":
+            if balayage:
+                if not hasattr(self, "circuit"):
+                    raise ArretBot("le balayage (K) nécessite la méthode « points » (recolte.methode)")
+                from balayage import Balayeur
+                Balayeur(self).executer(capture, souris)
+            elif self.mode == "photo":
                 self.photographier(capture)
             elif self.methode == "zones":
                 self.recolter_zones(capture, souris, test=self.mode_test)
@@ -505,8 +513,10 @@ class Recolteur:
             raise ArretBot(f"carte non reconnue ({pourquoi}). Photographiez-la (mode Photos) "
                            "puis placez ses points de clic (python main.py points)")
         self.carte_id = ident
+        # Un point du balayage dont le nom n'a pas pu être lu n'est jamais
+        # récolté : donnez-lui sa céréale dans l'éditeur (touche C).
         indexees = [(("p", i), z) for i, z in enumerate(self.circuit.zones(ident))
-                    if not z.get("cereale") or z["cereale"] in self.cereales]
+                    if (not z.get("cereale") and z.get("source") != "balayage") or z.get("cereale") in self.cereales]
         nb_points = len(indexees)
         lire_nom = cfg_d.get("lire_nom", True)
         if detection and self.cellules.pret and cfg_c.get("verifier_infobulle", True):

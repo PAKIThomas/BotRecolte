@@ -310,6 +310,11 @@ def lancer_bot(cfg: dict, choix: dict):
         raccourcis["arret_urgence"]
     )
 
+    # Balayage de la carte (K) : pose les points de clic tout seul.
+    t_balayer = touche_vers_pynput(
+        raccourcis.get("balayer", "k")
+    )
+
     # Captures d'apprentissage (Maj+O / Maj+E par défaut).
     t_cap_mure = raccourci_avec_maj(
         raccourcis.get("capture_mure", "shift+o")
@@ -366,9 +371,9 @@ def lancer_bot(cfg: dict, choix: dict):
     # Thread du bot
     # -------------------------------------------------------------------------
 
-    def tache(auto: bool = False):
+    def tache(auto: bool = False, action: str = "recolte"):
         try:
-            recolteur.executer(auto=auto)
+            recolteur.executer(auto=auto, action=action)
 
         except Exception:
             log.exception(
@@ -392,8 +397,9 @@ def lancer_bot(cfg: dict, choix: dict):
 
     surveillant_actif = {"oui": False}
 
-    def lancer_scan(auto: bool = False):
-        """Démarre une récolte (touche N, ou démarrage automatique)."""
+    def lancer_scan(auto: bool = False, action: str = "recolte"):
+        """Démarre une récolte (touche N, ou démarrage automatique), ou le
+        balayage de la carte (touche K, action="balayage")."""
         if etat.occupe.is_set():
             if not auto:
                 log.info(
@@ -411,7 +417,10 @@ def lancer_bot(cfg: dict, choix: dict):
 
         etat.occupe.set()
 
-        if not auto:
+        if action == "balayage":
+            log.info("▶ Balayage de la carte : survol de toutes les cellules, aucun clic "
+                     "(arrêt : %s)…", raccourcis["arret_urgence"].upper())
+        elif not auto:
             log.info(
                 "▶ %s…",
                 {
@@ -422,7 +431,7 @@ def lancer_bot(cfg: dict, choix: dict):
 
         threading.Thread(
             target=tache,
-            kwargs={"auto": auto},
+            kwargs={"auto": auto, "action": action},
             name="BotRecolte",
             daemon=True,
         ).start()
@@ -515,6 +524,13 @@ def lancer_bot(cfg: dict, choix: dict):
             # -------------------------------------------------------------
             # Scan
             # -------------------------------------------------------------
+
+            if correspond(touche, t_balayer):
+                if not methode_zones:
+                    log.warning("Balayage (K) : disponible avec la méthode « points » uniquement.")
+                    return
+                lancer_scan(action="balayage")
+                return
 
             if correspond(touche, t_scan):
                 lancer_scan()
@@ -624,6 +640,10 @@ def lancer_bot(cfg: dict, choix: dict):
     )
 
     if methode_zones:
+        log.info(
+            "[%s] balayer la carte : trouve toutes les céréales et pose les points de clic (aucun clic)",
+            raccourcis.get("balayer", "k").upper(),
+        )
         log.info(
             "[%s] ajouter un point de clic sous le curseur  [%s] retirer le point sous le curseur "
             "(bot au repos ou en pause)",

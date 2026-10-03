@@ -17,6 +17,10 @@ raccourcis:
   # Dofus reçoit aussi la touche : Maj évite de déclencher un raccourci du jeu.
   capture_mure: "shift+o"       # céréale MÛRE sous le curseur
   capture_epuisee: "shift+e"    # céréale ÉPUISÉE (ou fausse détection) sous le curseur
+  # Balayage de la carte : survole toutes les cellules et pose un point de clic
+  # sur chaque céréale (nom lu dans l'infobulle). Aucun clic. Si la touche
+  # ouvre une fenêtre dans Dofus, utilisez par exemple "shift+k".
+  balayer: "k"
 
 # --- Méthode de récolte ------------------------------------------------------
 # points    : (par défaut) vous photographiez vos cartes (mode Photos, N), vous
@@ -42,7 +46,7 @@ circuit:
   # infobulle devient un point (appris) ; sans infobulle, elle devient un
   # « vide » et n'est plus jamais survolée sur cette carte.
   detection:
-    actif: true
+    actif: false                # remplacé par le balayage (touche K)
     cartes_inconnues: true      # carte jamais photographiée : ajoutée au circuit + détection
     lire_nom: true              # lit le nom de la céréale dans l'infobulle (Tesseract)
     apprendre: true             # enregistre points appris et vides
@@ -107,8 +111,9 @@ ecran:
   zone_jeu: {left: 0, top: 0, width: 1440, height: 760}
   # Rectangles à ignorer dans la zone de jeu (points) : minimap, boutons, etc.
   zones_exclues:
-    - {left: 0, top: 0, width: 260, height: 60}      # bandeau haut gauche (à ajuster)
-    # - {left: 1300, top: 0, width: 140, height: 140}
+    - {left: 0, top: 0, width: 260, height: 95}      # nom de la zone, coordonnées, guilde
+    - {left: 1320, top: 0, width: 120, height: 36}   # boutons en haut à droite
+    - {left: 1405, top: 36, width: 35, height: 180}  # colonne d'icônes à droite
 
 # --- Fenêtre / sécurité ------------------------------------------------------
 securite:
@@ -228,6 +233,21 @@ infobulle:
   ocr_secours: true             # utilise pytesseract s'il est installé
   mots_faucher: ["faucher"]
   mots_epuisee: ["épuisée", "epuisee", "épuisé", "epuise"]
+
+# --- Balayage (touche K) -------------------------------------------------------
+# Le bot survole chaque cellule, sans cliquer, et pose un point de clic sur
+# chaque céréale qui affiche une infobulle (« Faucher » ou « Épuisé »), avec la
+# céréale lue dans l'infobulle. Une céréale = un seul point (reconnue par la
+# position de son infobulle). Nécessite Tesseract pour lire les noms.
+balayage:
+  attente: 0.15                 # s max d'attente de l'infobulle par cellule (ajustée au délai mesuré)
+  decalage_y: -6                # survol un peu au-dessus du centre de la cellule (points)
+  second_passage: true          # 2e passage : haut des cellules autour des céréales trouvées
+  hauteur_second: 0.55          # hauteur de ce survol, en fraction de cellule
+  marge: 10                     # cellules trop près du bord de l'écran ignorées (points)
+  tolerance_ancre: 4            # même infobulle à 4 points près = même céréale
+  mesurer_existants: true       # lit d'abord l'infobulle des points déjà posés (pas de doublon)
+  enregistrer_illisibles: true  # infobulles au nom illisible enregistrées dans debug/
 
 # --- Surbrillance / fin de file ----------------------------------------------
 file_attente:

@@ -48,7 +48,38 @@ python main.py      # fenêtre : céréales à cocher + mode (Photos, Points de 
 sur **N** : la carte est photographiée (`circuit/photos/`). Une carte déjà
 photographiée est reconnue et n'est pas dupliquée.
 
-**2. Points de clic.** Mode « Points de clic », ou en ligne de commande :
+**2. Points de clic, automatiquement : touche K (recommandé).** Sur la carte,
+appuyez sur **K**. Le bot survole toutes les cellules, vite, **sans jamais
+cliquer**. Chaque fois qu'une infobulle « Faucher » ou « Épuisé » s'affiche, il
+lit le **nom de la céréale** et pose un point de clic à cet endroit, avec la
+bonne céréale. Une carte pas encore photographiée l'est automatiquement.
+- **Une céréale = un seul point.** Plusieurs cellules peuvent montrer la même
+  plante. Le bot la reconnaît par la position de son infobulle et par la
+  plante qui s'éclaircit au survol ; un seul des deux indices suffit.
+- **Deux passages** : le centre de chaque cellule, puis le haut des cellules
+  autour des céréales trouvées. Dans un champ dense, une céréale de derrière
+  n'est visible que par le haut.
+- Arbres, fleurs… (« Épuisé » sans nom de céréale) : ignorés.
+- **Nom illisible** : le point est posé sans céréale (« ? » dans l'éditeur) et
+  n'est **jamais récolté**. Donnez-lui sa céréale (touche C) ou supprimez-le.
+  L'image de l'infobulle est enregistrée dans `debug/balayage_noms_illisibles/`.
+- **Relancer K** sur une carte n'ajoute que ce qui manque : les points déjà
+  posés sont survolés d'abord et jamais dupliqués.
+- Durée : environ 2 à 3 minutes par carte, une seule fois. Le temps d'attente
+  de l'infobulle s'ajuste au délai mesuré sur votre Mac (`balayage.attente`).
+- P met en pause, W arrête. À la fin : bilan dans le terminal et image
+  `debug/<date>/balayage.png` (vert = nouveaux points).
+
+Lecture des noms : Tesseract nécessaire (`brew install tesseract`,
+`pip install pytesseract`). Si K ouvre une fenêtre dans Dofus, changez la
+touche dans `config.yaml > raccourcis > balayer` (ex. `"shift+k"`).
+
+**Retirer des points.** Dans l'éditeur (`python main.py points`) : clic droit
+sur un point, ou **X** pour retirer d'un coup tous les points posés par le
+balayage sur la carte (Z annule). En jeu : **Maj+E** retire le point sous la
+souris. Les points posés par le bot sont en pointillés.
+
+**2 bis. Points de clic à la main.** Mode « Points de clic », ou en ligne de commande :
 
 ```bash
 python main.py points --cereales ble,orge,avoine
@@ -78,6 +109,7 @@ avec Maj+flèches et + / - : le réglage est enregistré dans
 | clic gauche | point de clic sur la céréale choisie |
 | clic droit | supprimer le point |
 | C | donner la céréale choisie au point sous le curseur |
+| X | retirer tous les points posés par le balayage (K) sur cette carte |
 | Z | annuler |
 | V | afficher les vides appris (croix grises) : clic droit = retirer |
 | S | proposer les céréales oubliées (cercles pointillés) : clic = accepter, clic droit = rejeter |
@@ -133,8 +165,9 @@ fauchées (par type), la durée et le total de la session. Une ligne par carte
 est ajoutée à `stats/recoltes.csv`. Le résumé de la session s'affiche quand
 vous quittez (Ctrl+C).
 
-**Détection des céréales sur la carte (apprise).** En plus de vos points, le
-bot cherche lui-même les céréales que vous n'avez pas pointées, à partir de
+**Détection des céréales sur la carte (apprise, désactivée par défaut,
+remplacée par le balayage K ; `circuit.detection.actif: true` pour la
+réactiver).** En plus de vos points, le bot cherche lui-même les céréales que vous n'avez pas pointées, à partir de
 tout ce qu'il a appris (`cellules.py`). Les céréales sont toujours posées sur
 une cellule de la grille : il compare donc chaque cellule de la carte à vos
 points (toutes cartes confondues), en couleur et en forme, et propose celles
@@ -177,6 +210,7 @@ coordonnées automatiquement au premier passage.
 | Touche (config.yaml > raccourcis) | Action |
 |---|---|
 | **N** | photo / test / récolte de la carte, selon le mode |
+| **K** | balayage : trouve toutes les céréales et pose les points de clic (aucun clic) |
 | **P** | pause / reprise |
 | **W** | arrêt d'urgence immédiat |
 | **Maj+O** | ajoute un point de clic sous le curseur (céréale : celle cochée, s'il n'y en a qu'une) |
@@ -443,6 +477,7 @@ points et dessine `zone_jeu` (vert) et `zones_exclues` (rouge) dans
 | `vision.py` | capture mss, détecteur HSV + template (interchangeable), infobulles, surbrillance, alertes, annotation |
 | `mouse.py` | souris humaine : Bézier bruitées, profil de vitesse, dépassement, délais log-normaux |
 | `circuit.py` | cartes photographiées, reconnaissance de la carte, points de clic |
+| `balayage.py` | touche K : survol de toute la carte, points de clic posés d'après l'infobulle |
 | `cellules.py` | détection des céréales par cellule, apprise des points et des infobulles |
 | `editeur_points.py` | éditeur des points de clic (`python main.py points`) |
 | `harvester.py` | boucle de récolte (points ou détection), file d'attente, mode test |

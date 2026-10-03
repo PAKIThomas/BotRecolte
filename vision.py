@@ -9,6 +9,7 @@ Conventions de coordonnées :
 
 from __future__ import annotations
 
+import difflib
 import json
 import logging
 import os
@@ -634,6 +635,10 @@ class LecteurInfobulle:
         self.cfg = cfg["infobulle"]
         self.echelle_assets = float(cfg["detection"].get("echelle_images_assets", 2.0))
         self._cache: dict = {}
+        # Position écran (points) du mot « Faucher » / « Épuisé » lors de la
+        # dernière lecture réussie par image, sinon None.
+        self.position: tuple[float, float] | None = None
+        self._fonds: list[np.ndarray] | None = None
         self._echelle_apprise: float | None = None
         self._base = 1.0
         self.tpl_faucher = charger_images(ASSETS / "infobulles" / "faucher")
@@ -654,6 +659,23 @@ class LecteurInfobulle:
     def operationnel(self) -> bool:
         return bool(self.tpl_faucher or self.tpl_epuisee or self._ocr)
 
+    def presente(self, frame: Frame) -> bool:
+        """Test très rapide (~2 ms) : y a-t-il une infobulle dans l'image ?
+        On cherche la couleur de fond des infobulles, mesurée sur le bord de
+        vos images assets/infobulles/. Sans image : toujours True."""
+        if self._fonds is None:
+            bords = [np.concatenate([t[0], t[-1], t[:, 0], t[:, -1]])
+                     for t in self.tpl_faucher + self.tpl_epuisee if t.shape[0] > 4 and t.shape[1] > 4]
+            self._fonds = [np.median(b, axis=0) for b in bords]
+        if not self._fonds:
+            return True
+        img = frame.image.astype(np.int16)
+        tol = int(self.cfg.get("tolerance_fond", 14))
+        n = 0
+        for fond in self._fonds:
+            n = max(n, int(np.count_nonzero((np.abs(img - fond) <= tol).all(axis=2))))
+        return n / (frame.echelle ** 2) >= self.cfg.get("pixels_fond_min", 250)
+
     def _gris(self, tpl: np.ndarray, e: float) -> np.ndarray:
         cle = (id(tpl), round(e, 4))
         g = self._cache.get(cle)
@@ -662,17 +684,17 @@ class LecteurInfobulle:
         return g
 
     def _score(self, gris: np.ndarray, templates: list[np.ndarray], echelles: list[float]
-               ) -> tuple[float, float]:
-        """(meilleur score, échelle relative correspondante)."""
-        meilleur = (-1.0, 1.0)
+               ) -> tuple[float, float, tuple[int, int]]:
+        """(meilleur score, échelle relative, position du texte en pixels)."""
+        meilleur = (-1.0, 1.0, (0, 0))
         for tpl in templates:
             for e in echelles:
                 t = self._gris(tpl, self._base * e)
                 if t.shape[0] > gris.shape[0] or t.shape[1] > gris.shape[1] or min(t.shape) < 6:
                     continue
-                s = float(cv2.minMaxLoc(cv2.matchTemplate(gris, t, cv2.TM_CCOEFF_NORMED))[1])
+                _, s, _, loc = cv2.minMaxLoc(cv2.matchTemplate(gris, t, cv2.TM_CCOEFF_NORMED))
                 if s > meilleur[0]:
-                    meilleur = (s, e)
+                    meilleur = (float(s), e, loc)
         return meilleur
 
     def lire(self, frame: Frame) -> tuple[str, str]:
@@ -687,15 +709,19 @@ class LecteurInfobulle:
         # Taille apprise d'abord ; toutes les tailles si rien n'est trouvé.
         essais = [[self._echelle_apprise], toutes] if self._echelle_apprise else [toutes]
         s_f = s_e = -1.0
+        rien = (-1.0, 1.0, (0, 0))
+        self.position = None
         for echelles in essais:
-            s_e, e_e = self._score(gris, self.tpl_epuisee, echelles) if self.tpl_epuisee else (-1.0, 1.0)
-            s_f, e_f = self._score(gris, self.tpl_faucher, echelles) if self.tpl_faucher else (-1.0, 1.0)
+            s_e, e_e, l_e = self._score(gris, self.tpl_epuisee, echelles) if self.tpl_epuisee else rien
+            s_f, e_f, l_f = self._score(gris, self.tpl_faucher, echelles) if self.tpl_faucher else rien
             # Sécurité : « Épuisé » l'emporte toujours s'il est détecté.
             if s_e >= seuil:
                 self._echelle_apprise = e_e
+                self.position = petit.vers_points(*l_e)
                 return self.EPUISEE, f"template épuisée {s_e:.2f}"
             if s_f >= seuil:
                 self._echelle_apprise = e_f
+                self.position = petit.vers_points(*l_f)
                 return self.FAUCHER, f"template faucher {s_f:.2f}"
         img = frame.image
         if self._ocr:
@@ -717,18 +743,30 @@ class LecteurInfobulle:
             import pytesseract
         except ImportError:
             return None
+        noms = {cid: _normaliser(c.get("nom", cid)) for cid, c in cereales.items()}
         hsv = cv2.cvtColor(frame.image, cv2.COLOR_BGR2HSV)
-        texte_clair = (hsv[:, :, 2] > 170) & (hsv[:, :, 1] < 90)      # texte blanc de l'infobulle
-        img = 255 - texte_clair.astype(np.uint8) * 255
-        if frame.echelle < 2:
-            img = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_NEAREST)
-        try:
-            mots = set(re.findall(r"[a-z]+", _normaliser(pytesseract.image_to_string(img, config="--psm 11"))))
-        except Exception:
-            return None
-        for cid, c in cereales.items():
-            if _normaliser(c.get("nom", cid)) in mots:
-                return cid
+        gris = cv2.cvtColor(frame.image, cv2.COLOR_BGR2GRAY)
+        # 1) texte clair (blanc, ou coloré mais lumineux) ; 2) gris inversé.
+        versions = [255 - ((hsv[:, :, 2] > 170) & (hsv[:, :, 1] < 90)).astype(np.uint8) * 255,
+                    255 - ((hsv[:, :, 2] > 150)).astype(np.uint8) * 255,
+                    255 - gris]
+        tous: list[str] = []
+        for img in versions:
+            if frame.echelle < 2:
+                img = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+            try:
+                mots = re.findall(r"[a-z]+", _normaliser(pytesseract.image_to_string(img, config="--psm 11")))
+            except Exception:
+                return None
+            for cid, nom in noms.items():
+                if nom in mots:
+                    return cid
+            tous += mots
+        # Tolérance aux petites erreurs de lecture (« bie » pour « blé »…).
+        for mot in tous:
+            proches = difflib.get_close_matches(mot, list(noms.values()), n=1, cutoff=0.75)
+            if proches and len(mot) >= 3:
+                return next(cid for cid, nom in noms.items() if nom == proches[0])
         return None
 
     def _langue(self) -> str:
