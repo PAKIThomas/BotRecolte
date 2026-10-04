@@ -60,16 +60,24 @@ class Circuit:
         if not self.fichier.exists():
             return
         try:
+            self._mtime = self.fichier.stat().st_mtime_ns
             self.cartes = json.loads(self.fichier.read_text(encoding="utf-8"))
         except Exception:
             log.exception("Fichier du circuit illisible : %s", self.fichier)
             return
+        # Signatures des photos (gardées en mémoire : un rechargement ne relit
+        # que les nouvelles photos).
+        cache = getattr(self, "_cache_signatures", {})
+        self._cache_signatures = cache
+        self._signatures = {}
         for ident, carte in self.cartes.items():
             self._signatures[ident] = []
             for nom in carte.get("photos", []):
-                img = cv2.imread(str(self.dossier / "photos" / nom))
-                if img is not None:
-                    self._signatures[ident].append(self._signature_image(img))
+                if nom not in cache:
+                    img = cv2.imread(str(self.dossier / "photos" / nom))
+                    cache[nom] = self._signature_image(img) if img is not None else None
+                if cache[nom] is not None:
+                    self._signatures[ident].append(cache[nom])
 
     def sauver(self):
         with self._verrou:
@@ -77,6 +85,20 @@ class Circuit:
             tmp = self.fichier.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(self.cartes, ensure_ascii=False, indent=1), encoding="utf-8")
             tmp.replace(self.fichier)
+            self._mtime = self.fichier.stat().st_mtime_ns
+
+    def recharger_si_modifie(self) -> bool:
+        """Recharge cartes.json s'il a été modifié par un autre programme (le
+        bot qui pose des points pendant que l'éditeur est ouvert)."""
+        try:
+            mtime = self.fichier.stat().st_mtime_ns
+        except OSError:
+            return False
+        if mtime == getattr(self, "_mtime", None):
+            return False
+        with self._verrou:
+            self._charger()
+        return True
 
     def chemin_photo(self, ident: str, n: int = 0) -> Path | None:
         photos = self.cartes.get(ident, {}).get("photos", [])
@@ -226,18 +248,21 @@ class Circuit:
 
     def definir_zones(self, ident: str, zones: list[dict]):
         with self._verrou:
+            self.recharger_si_modifie()      # modifications faites ailleurs (éditeur / bot)
             self.cartes[ident]["zones"] = zones
             self.sauver()
 
     def ajouter_zone(self, ident: str, px: float, py: float, cereale: str = ""):
         """Ajoute un POINT de clic (Maj+O)."""
         with self._verrou:
+            self.recharger_si_modifie()      # modifications faites ailleurs (éditeur / bot)
             self.cartes[ident]["zones"].append(nouveau_point(px, py, cereale))
             self.sauver()
 
     def apprendre_point(self, ident: str, px: float, py: float, cereale: str):
         """Point appris par le bot (infobulle lue sur une cellule détectée)."""
         with self._verrou:
+            self.recharger_si_modifie()      # modifications faites ailleurs (éditeur / bot)
             p = nouveau_point(px, py, cereale)
             p["source"] = "auto"
             self.cartes[ident].setdefault("zones", []).append(p)
@@ -248,6 +273,7 @@ class Circuit:
         avec la position de leur infobulle (`ancre`) pour ne jamais ajouter
         deux fois la même céréale lors d'un prochain balayage."""
         with self._verrou:
+            self.recharger_si_modifie()      # modifications faites ailleurs (éditeur / bot)
             zs = self.cartes[ident].setdefault("zones", [])
             for p in points:
                 z = nouveau_point(p["x"], p["y"], p.get("cereale") or "")
@@ -260,6 +286,7 @@ class Circuit:
     def noter_ancres(self, ident: str, ancres: dict[int, tuple[float, float]]):
         """Mémorise la position de l'infobulle de points existants."""
         with self._verrou:
+            self.recharger_si_modifie()      # modifications faites ailleurs (éditeur / bot)
             zs = self.cartes[ident].get("zones", [])
             for i, a in ancres.items():
                 if i < len(zs):
@@ -270,12 +297,14 @@ class Circuit:
         """Cellule survolée sans infobulle : jamais plus proposée sur cette carte,
         et exemple de « pas une céréale » pour le détecteur."""
         with self._verrou:
+            self.recharger_si_modifie()      # modifications faites ailleurs (éditeur / bot)
             self.cartes[ident].setdefault("vides", []).append({"x": round(px, 1), "y": round(py, 1)})
             self.sauver()
 
     def retirer_zone(self, ident: str, px: float, py: float) -> bool:
         """Retire le point ou la zone sous (px, py) (Maj+E)."""
         with self._verrou:
+            self.recharger_si_modifie()      # modifications faites ailleurs (éditeur / bot)
             zs = self.cartes.get(ident, {}).get("zones", [])
             i = cible_sous(zs, px, py, self.c.get("rayon_point", 8))
             if i is None:

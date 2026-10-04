@@ -428,6 +428,23 @@ class EditeurPoints:
             return
         self.charger()
 
+    def _surveiller(self):
+        """Toutes les secondes : si le bot a modifié le circuit (balayage K,
+        Maj+O/E), les points affichés sont mis à jour, sans rien écraser."""
+        try:
+            if self.circuit.recharger_si_modifie():
+                ident = self.ids[self.index] if self.ids else None
+                self.ids = sorted(self.circuit.cartes)
+                if ident in self.ids:
+                    self.index = self.ids.index(ident)
+                    self.points = copy.deepcopy(self.circuit.zones(ident))
+                    self.historique = []
+                    self._dessiner()
+                log.info("Circuit mis à jour par le bot : points rechargés.")
+        except Exception:
+            log.debug("Rechargement du circuit impossible", exc_info=True)
+        self.racine.after(1000, self._surveiller)
+
     def quitter(self):
         self.racine.destroy()
 
@@ -438,6 +455,7 @@ class EditeurPoints:
             return
         self.charger()
         self.racine.focus_force()
+        self.racine.after(1000, self._surveiller)
         self.racine.mainloop()
 
 

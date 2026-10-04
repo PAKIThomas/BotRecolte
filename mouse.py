@@ -119,6 +119,15 @@ class SourisHumaine:
         pts = trajectoire(depart, cible, self.cfg)
         self._suivre(pts, duree_mouvement(math.hypot(x - depart[0], y - depart[1]), self.cfg))
 
+    def glisser(self, x: float, y: float, duree: float = 0.03):
+        """Déplacement court et rapide, presque droit (repérage de la carte)."""
+        depart = self.position()
+        n = max(2, int(duree * self.cfg.get("pas_par_seconde", 120)))
+        pts = [(depart[0] + (x - depart[0]) * k / n + (random.gauss(0, 0.6) if k < n else 0),
+                depart[1] + (y - depart[1]) * k / n + (random.gauss(0, 0.6) if k < n else 0))
+               for k in range(1, n + 1)]
+        self._suivre(pts, duree)
+
     def _suivre(self, pts, duree: float):
         pas = duree / max(len(pts), 1)
         for (px, py) in pts:

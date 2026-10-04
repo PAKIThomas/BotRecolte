@@ -13,15 +13,20 @@ toujours la même pour une céréale donnée, et grâce à la plante qui
 s'éclaircit au survol (les parties visibles de deux plantes ne se recouvrent
 jamais). Un seul de ces deux indices suffit à écarter un doublon.
 
-Deux passages :
-  1. le centre de chaque cellule de la zone de jeu ;
-  2. autour des céréales trouvées, le haut de chaque cellule : dans un champ
-     dense, une céréale de derrière n'est visible que par le haut.
+Étapes :
+  1. repérage éclair : la souris parcourt toutes les cellules sans attendre ;
+     les cellules où une infobulle apparaît sont retenues ;
+  2. survol précis (lecture de l'infobulle et du nom) autour de ces cellules ;
+  3. le haut des cellules autour des céréales trouvées : dans un champ dense,
+     une céréale de derrière n'est visible que par le haut.
+Chaque point est enregistré sur la carte dès qu'il est trouvé.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import random
 import time
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -70,10 +75,10 @@ def cellules_a_survoler(grille: Grille, zone: dict, exclues: list[dict], marge: 
 Lueur = tuple[float, float, np.ndarray]     # (gauche, haut, masque) en points écran
 
 
-def lueur(ref: vision.Frame, frame: vision.Frame) -> Lueur | None:
-    """Pixels de la plante éclaircie par le survol (plus lumineux que sur
-    l'image de référence), infobulle exclue. Le curseur n'apparaît pas dans
-    les captures macOS."""
+def lueur(ref: vision.Frame, frame: vision.Frame, curseur: tuple[float, float]) -> Lueur | None:
+    """Pixels de la plante éclaircie par le survol : plus lumineux que sur
+    l'image du début du balayage, infobulle exclue, et reliés au curseur (la
+    plante survolée est sous le curseur ; le reste de l'image est ignoré)."""
     a = frame.reduire(1.0).image if frame.echelle > 1 else frame.image
     x0, y0 = ref.vers_pixels(frame.left, frame.top)
     h, w = a.shape[:2]
@@ -88,9 +93,20 @@ def lueur(ref: vision.Frame, frame: vision.Frame) -> Lueur | None:
     sombre = cv2.dilate(((va < 70) & (vb >= 70)).astype(np.uint8), np.ones((15, 15), np.uint8))
     masque[sombre > 0] = 0
     masque = cv2.morphologyEx(masque, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
-    if int(masque.sum()) < 30:
+    n, etiq, stats, _ = cv2.connectedComponentsWithStats(masque)
+    if n <= 1:
         return None
-    return frame.left, frame.top, masque.astype(bool)
+    # Composantes qui touchent les abords du curseur.
+    cx, cy = int(round(curseur[0] - frame.left)), int(round(curseur[1] - frame.top))
+    r = 8
+    voisinage = etiq[max(0, cy - r):cy + r + 1, max(0, cx - r):cx + r + 1]
+    gardees = set(int(v) for v in np.unique(voisinage)) - {0}
+    if not gardees:
+        return None
+    plante = np.isin(etiq, list(gardees))
+    if int(plante.sum()) < 30:
+        return None
+    return frame.left, frame.top, plante
 
 
 def meme_lueur(a: Lueur | None, b: Lueur | None) -> bool:
@@ -124,8 +140,9 @@ class Balayeur:
         # Céréales déjà connues sur la carte, par deux indices : la position
         # de leur infobulle (ancre) et la plante éclaircie au survol (lueur).
         self.ancres: list[tuple[float, float, str]] = []
-        self.ref_points: vision.Frame | None = None
         self.lueurs: list[Lueur] = []
+        self.ref: vision.Frame | None = None       # carte au début du balayage (1 px par point)
+        self.titres: list[tuple[np.ndarray, str]] = []   # titres d'infobulle déjà lus -> céréale
 
     # ------------------------------------------------------------ outils
 
@@ -137,36 +154,151 @@ class Balayeur:
             return min(self.attente_max, max(0.06, d[int(0.9 * (len(d) - 1))] * 1.5 + 0.03))
         return self.attente_max
 
+    def delai_appris(self) -> float | None:
+        try:
+            return float(json.loads((self.circuit.dossier / "delai_infobulle.json").read_text())["p90"])
+        except Exception:
+            return None
+
+    def sauver_delai(self):
+        """Mémorise le délai d'apparition de l'infobulle mesuré sur ce Mac :
+        le repérage des prochains balayages sera aussi rapide que possible."""
+        if len(self.delais) < 5:
+            return
+        d = sorted(self.delais)
+        try:
+            (self.circuit.dossier / "delai_infobulle.json").write_text(
+                json.dumps({"p90": round(d[int(0.9 * (len(d) - 1))], 3)}))
+        except Exception:
+            log.debug("Délai non enregistré", exc_info=True)
+
+    def titre(self, fb: vision.Frame, ancre: tuple[float, float] | None) -> np.ndarray | None:
+        """Lettres blanches du nom de la céréale, juste au-dessus de
+        « Faucher » (1 pixel par point), pour reconnaître un nom déjà lu sans OCR."""
+        if ancre is None:
+            return None
+        # Le titre est centré au-dessus de « Faucher » : il déborde un peu à
+        # gauche pour les noms longs (Frostiflax…).
+        x0, y0 = fb.vers_pixels(ancre[0] - 22, ancre[1] - 50)
+        x1, y1 = fb.vers_pixels(ancre[0] + 95, ancre[1] - 16)
+        if x0 < 0 or y0 < 0 or x1 > fb.image.shape[1] or y1 > fb.image.shape[0]:
+            return None
+        img = fb.image[y0:y1, x0:x1]
+        if fb.echelle > 1:
+            img = cv2.resize(img, (117, 34), interpolation=cv2.INTER_AREA)
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        lettres = (hsv[:, :, 2] > 170) & (hsv[:, :, 1] < 80)
+        # Seulement les lettres posées sur le fond sombre de l'infobulle.
+        fond = cv2.dilate((hsv[:, :, 2] < 70).astype(np.uint8), np.ones((7, 7), np.uint8)) > 0
+        lettres &= fond
+        if int(lettres.sum()) < 15:
+            return None
+        ys, xs = np.nonzero(lettres)
+        return lettres[ys.min():ys.max() + 1, xs.min():xs.max() + 1]      # recadré sur le mot
+
+    @staticmethod
+    def meme_titre(a: np.ndarray, b: np.ndarray) -> bool:
+        """Même mot : taille du mot identique à 2 pixels près, puis formes
+        floutées très corrélées (tolère le lissage du texte)."""
+        if abs(a.shape[0] - b.shape[0]) > 2 or abs(a.shape[1] - b.shape[1]) > 2:
+            return False
+        h, w = max(a.shape[0], b.shape[0]), max(a.shape[1], b.shape[1])
+        fa = cv2.GaussianBlur(cv2.resize(a.astype(np.float32), (w, h)), (5, 5), 1.2).flatten()
+        fb = cv2.GaussianBlur(cv2.resize(b.astype(np.float32), (w, h)), (5, 5), 1.2).flatten()
+        fa -= fa.mean()
+        fb -= fb.mean()
+        return float(fa @ fb / (np.linalg.norm(fa) * np.linalg.norm(fb) + 1e-6)) >= 0.8
+
+    def nom_cereale(self, fb: vision.Frame, ancre: tuple[float, float] | None) -> str | None:
+        """Nom de la céréale de l'infobulle : titre déjà vu (instantané), sinon
+        OCR sur le cadre de l'infobulle, puis sur toute la zone."""
+        t = self.titre(fb, ancre)
+        if t is not None:
+            for t2, nom in self.titres:
+                if self.meme_titre(t, t2):
+                    return nom
+        cereales = self.cfg["cereales"]
+        nom = None
+        if ancre is not None:
+            x0, y0 = fb.vers_pixels(ancre[0] - 45, ancre[1] - 50)
+            x1, y1 = fb.vers_pixels(ancre[0] + 95, ancre[1] + 4)
+            cadre = fb.image[max(0, y0):max(0, y1), max(0, x0):max(0, x1)]
+            if cadre.size:
+                nom = self.infobulle.lire_nom(vision.Frame(cadre, 0, 0, fb.echelle), cereales)
+        if not nom:
+            nom = self.infobulle.lire_nom(fb, cereales)
+        if nom and t is not None:
+            self.titres.append((t, nom))
+        return nom
+
     def connue(self, ancre: tuple[float, float] | None) -> bool:
         return ancre is not None and any(abs(ancre[0] - x) <= self.tol and abs(ancre[1] - y) <= self.tol
                                          for x, y, _ in self.ancres)
 
+    ZONE_LUEUR = {"dx": -90, "dy": -130, "width": 180, "height": 180}
+    # L'infobulle s'affiche juste à droite du curseur : zone du test rapide.
+    ZONE_PRESENCE = {"dx": -30, "dy": -90, "width": 230, "height": 170}
+
     def survoler(self, capture: vision.Capture, souris: "SourisHumaine", px: float, py: float,
-                 precedente: tuple[float, float] | None) -> tuple[str, tuple[float, float] | None, vision.Frame | None]:
-        """Survole (px, py) et guette l'infobulle. Retourne (verdict, ancre, image)."""
+                 precedente: tuple[float, float] | None
+                 ) -> tuple[str, tuple[float, float] | None, vision.Frame | None, Lueur | None]:
+        """Survole (px, py) et guette l'infobulle. Retourne (verdict, ancre,
+        image de l'infobulle, plante éclaircie par ce survol)."""
         L = vision.LecteurInfobulle
-        zone = self.cfg["infobulle"]["zone"]
-        souris.deplacer(px, py)
+        zone = self.c.get("zone_infobulle") or self.cfg["infobulle"]["zone"]
+        sx, sy = souris.position()
+        if abs(sx - px) + abs(sy - py) < 160:
+            souris.glisser(px, py, float(self.c.get("deplacement_precis", 0.04)) * random.uniform(0.85, 1.2))
+        else:
+            souris.deplacer(px, py)
         debut = time.monotonic()
         limite = debut + self.attente()
-        vu = (L.INCONNU, None, None)
+        verdict, ancre, fb_vue = L.INCONNU, None, None
         while True:
             fb = capture.grab_autour(px, py, zone)
             # Test rapide d'abord : la lecture complète n'est faite que si une
             # infobulle est visible (les cellules vides restent rapides).
-            verdict = self.infobulle.lire(fb)[0] if self.infobulle.presente(fb) else L.INCONNU
-            if verdict in (L.FAUCHER, L.EPUISEE):
-                ancre = self.infobulle.position
-                vu = (verdict, ancre, fb)
+            v = self.infobulle.lire(fb)[0] if self.infobulle.presente(fb) else L.INCONNU
+            if v in (L.FAUCHER, L.EPUISEE):
+                verdict, ancre, fb_vue = v, self.infobulle.position, fb
                 # Infobulle de la cellule précédente encore affichée ? On
                 # attend un peu, une nouvelle peut la remplacer.
                 if ancre is None or precedente is None or not (
                         abs(ancre[0] - precedente[0]) <= self.tol and abs(ancre[1] - precedente[1]) <= self.tol):
                     self.delais = (self.delais + [time.monotonic() - debut])[-40:]
-                    return vu
+                    break
             if time.monotonic() >= limite:
-                return vu
+                break
             souris.dormir(0.015)
+        if verdict == L.INCONNU:
+            return verdict, None, None, None
+        # Plante éclaircie : comparaison juste avant / juste après le survol.
+        # Plante éclaircie par ce survol (comparée à la carte du début).
+        lu = lueur(self.ref, capture.grab_autour(px, py, self.ZONE_LUEUR), (px, py)) if self.ref else None
+        return verdict, ancre, fb_vue, lu
+
+    def reperer(self, capture: vision.Capture, souris: "SourisHumaine", chemin: list[tuple[float, float]]
+                ) -> set[int]:
+        """Repérage éclair : la souris parcourt toutes les cellules sans
+        attendre l'infobulle. Une infobulle visible marque la cellule (et la
+        précédente : l'infobulle peut apparaître avec un léger retard)."""
+        pause = float(self.c.get("pause_reperage", 0.06))
+        appris = self.delai_appris()
+        if appris:
+            # Délai d'apparition mesuré lors des balayages précédents (+ marge).
+            pause = max(0.025, min(pause, appris * 1.3 + 0.01))
+        log.info("   (pause par cellule : %.0f ms)", pause * 1000)
+        duree = float(self.c.get("deplacement_reperage", 0.02))
+        reperees: set[int] = set()
+        for k, (px, py) in enumerate(chemin):
+            if k % 40 == 0:
+                self.r.verifier_premier_plan()
+                self.r.verifier_alertes(capture)
+            souris.glisser(px, py, duree * random.uniform(0.85, 1.2))
+            souris.dormir(pause)
+            if self.infobulle.presente(capture.grab_autour(px, py, self.ZONE_PRESENCE)):
+                reperees |= {k, k - 1} - {-1}
+        return reperees
 
     # ----------------------------------------------------------- balayage
 
@@ -191,9 +323,10 @@ class Balayeur:
             z = exclues[0]
             souris.deplacer(z["left"] + z["width"] / 2, z["top"] + z["height"] / 2)
             souris.dormir(0.15)
+        self.circuit.recharger_si_modifie()
         ref = capture.grab()
         r.verifier_alertes(capture, ref)
-        self.ref_points = ref.reduire(1.0)
+        self.ref = ref.reduire(1.0)
         ident, score, pourquoi = self.circuit.reconnaitre(ref)
         if not ident:
             ident, _, _ = self.circuit.photographier(ref)
@@ -216,11 +349,9 @@ class Balayeur:
                      len(a_mesurer))
             mesurees = {}
             for i, z in r.ordre_zones(list(a_mesurer.items()), souris.position()):
-                verdict, ancre, _ = self.survoler(capture, souris, z["x"], z["y"], None)
-                if verdict in (L.FAUCHER, L.EPUISEE):
-                    lu = self.mesurer_lueur(capture, z["x"], z["y"])
-                    if lu is not None:
-                        self.lueurs.append(lu)
+                verdict, ancre, _, lu = self.survoler(capture, souris, z["x"], z["y"], None)
+                if lu is not None:
+                    self.lueurs.append(lu)
                 if ancre is not None and not z.get("ancre"):
                     mesurees[i] = ancre
                     self.ancres.append((ancre[0], ancre[1], z.get("cereale", "")))
@@ -237,29 +368,39 @@ class Balayeur:
         precedente = None
         compteur = 0
 
+        def deja_connue(px, py, cereale, ancre, lu) -> bool:
+            """Même céréale qu'un point déjà posé : même infobulle, même
+            plante éclaircie, ou (éclaircissement non visible) même céréale
+            à moins de 3/4 de cellule (deux céréales voisines sont toujours
+            à une cellule d'écart au moins)."""
+            if self.connue(ancre) or any(meme_lueur(lu, q) for q in self.lueurs):
+                return True
+            if lu is None:
+                proche = 0.75 * self.grille.hauteur
+                return any(z.get("cereale", "") == cereale and abs(z["x"] - px) < proche and abs(z["y"] - py) < proche
+                           for z in self.circuit.zones(ident))
+            return False
+
         def passage(points: list[tuple[float, float]], nom: str):
             nonlocal precedente, compteur, illisibles
             log.info("🔎 %s : %d survol(s)…", nom, len(points))
             for px, py in points:
                 compteur += 1
-                if compteur % 60 == 0:
+                if compteur % 40 == 0:
                     r.verifier_premier_plan()
                     r.verifier_alertes(capture)
-                verdict, ancre, fb = self.survoler(capture, souris, px, py, precedente)
+                verdict, ancre, fb, lu = self.survoler(capture, souris, px, py, precedente)
                 precedente = ancre
                 if verdict not in (L.FAUCHER, L.EPUISEE):
                     continue
                 touchees.add(self.grille.cellule(px, py))
-                # Même céréale qu'un point déjà posé : même infobulle, ou même
-                # plante qui s'éclaircit au survol.
-                if self.connue(ancre):
-                    continue
-                lu = self.mesurer_lueur(capture, px, py)
-                if any(meme_lueur(lu, q) for q in self.lueurs):
-                    continue
-                cereale = self.infobulle.lire_nom(fb, cereales) if fb is not None else None
+                if self.connue(ancre) or any(meme_lueur(lu, q) for q in self.lueurs):
+                    continue                        # céréale déjà trouvée (pas d'OCR inutile)
+                cereale = self.nom_cereale(fb, ancre) if fb is not None else None
                 if not cereale and verdict == L.EPUISEE:
                     continue                        # « Épuisé » d'un arbre, d'une fleur…
+                if deja_connue(px, py, cereale or "", ancre, lu):
+                    continue
                 if lu is not None:
                     self.lueurs.append(lu)
                 if not cereale:
@@ -267,30 +408,48 @@ class Balayeur:
                     self.sauver_illisible(fb)
                 if ancre is not None:
                     self.ancres.append((ancre[0], ancre[1], cereale or ""))
-                nouveaux.append({"x": px, "y": py, "cereale": cereale or "", "ancre": ancre, "lueur": lu})
-                log.info("  🌾 %s (%s) en (%.0f, %.0f)",
+                log.debug("    lueur %s, ancre %s", None if lu is None else (lu[0], lu[1], int(lu[2].sum())), ancre)
+                point = {"x": px, "y": py, "cereale": cereale or "", "ancre": ancre}
+                # Enregistré tout de suite sur la carte : rien n'est perdu si
+                # le balayage est interrompu (W, combat…).
+                self.circuit.ajouter_balayage(ident, [point])
+                nouveaux.append(point)
+                log.info("  🌾 %s (%s) en (%.0f, %.0f) → point de clic ajouté sur %s",
                          cereales.get(cereale, {}).get("nom", cereale) if cereale else "céréale au nom illisible",
-                         "Faucher" if verdict == L.FAUCHER else "Épuisé", px, py)
+                         "Faucher" if verdict == L.FAUCHER else "Épuisé", px, py, self.circuit.nom(ident))
 
-        passage([(cx, cy + dy) for cx, cy in cellules], "Passage 1 (toutes les cellules)")
-        if self.c.get("second_passage", True) and touchees:
-            haut = float(self.c.get("hauteur_second", 0.55)) * self.grille.hauteur
-            voisins = []
-            for cx, cy in cellules:
-                i, j = self.grille.cellule(cx, cy)
-                if any((i + di, j + dj) in touchees for di in (-1, 0, 1) for dj in (-1, 0, 1)):
-                    voisins.append((cx, cy - haut))
-            passage(voisins, "Passage 2 (haut des cellules autour des céréales)")
-
-        if nouveaux:
-            self.circuit.ajouter_balayage(ident, nouveaux)
+        chemin = [(cx, cy + dy) for cx, cy in cellules]
+        try:
+            if self.c.get("reperage_rapide", True):
+                t0 = time.monotonic()
+                log.info("⚡ Repérage rapide de %d cellules…", len(chemin))
+                reperees = self.reperer(capture, souris, chemin)
+                compteur += len(chemin)
+                cells = [self.grille.cellule(cx, cy) for cx, cy in cellules]
+                marquees = {cells[k] for k in reperees}
+                cibles = [chemin[k] for k in sorted(reperees)]
+                log.info("   Infobulles vues sur %d cellule(s) en %.0f s → survol précis de %d cellule(s).",
+                         len(marquees), time.monotonic() - t0, len(cibles))
+                if cibles:
+                    passage(cibles, "Survol précis autour des céréales repérées")
+                else:
+                    log.info("   Aucune infobulle repérée : survol précis de toutes les cellules.")
+                    passage(chemin, "Survol précis (toutes les cellules)")
+            else:
+                passage(chemin, "Passage 1 (toutes les cellules)")
+            if self.c.get("second_passage", True) and touchees:
+                haut = float(self.c.get("hauteur_second", 0.55)) * self.grille.hauteur
+                # Cellules où une céréale a été vue : leur haut peut montrer une
+                # céréale de derrière, cachée au centre par celle de devant.
+                voisins = [(cx, cy - haut) for cx, cy in cellules if self.grille.cellule(cx, cy + dy) in touchees]
+                passage(voisins, "Passage 2 (haut des cellules des champs)")
+        finally:
+            self.sauver_delai()
+            if nouveaux:
+                log.info("💾 %d point(s) de clic enregistré(s) sur %s.", len(nouveaux), self.circuit.nom(ident))
         self.bilan(ident, ref, nouveaux, illisibles, compteur, time.monotonic() - debut)
         r.coords_traitees = self.circuit.dernieres_coords
         r.eloigner_souris(souris)
-
-    def mesurer_lueur(self, capture: vision.Capture, px: float, py: float) -> Lueur | None:
-        return lueur(self.ref_points, capture.grab_autour(px, py, {"dx": -90, "dy": -130,
-                                                                   "width": 180, "height": 180}))
 
     def sauver_illisible(self, fb: vision.Frame | None):
         if fb is None or not self.c.get("enregistrer_illisibles", True):

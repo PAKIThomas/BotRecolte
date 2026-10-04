@@ -267,9 +267,13 @@ class Recolteur:
         return False, "infobulle illisible"
 
     def verifier_alertes(self, capture: vision.Capture, frame: vision.Frame | None = None):
-        if not self.alertes.templates:
+        combat = self.cfg["securite"].get("detecter_combat", True)
+        if not self.alertes.templates and not combat:
             return
-        alerte = self.alertes.verifier(frame or capture.grab())
+        frame = frame or capture.grab()
+        if combat and vision.combat_visible(frame):
+            raise ArretBot("COMBAT détecté (cases de placement) : à vous de jouer")
+        alerte = self.alertes.verifier(frame) if self.alertes.templates else None
         if alerte:
             raise ArretBot(f"événement inattendu détecté : « {alerte} »")
 
@@ -484,6 +488,7 @@ class Recolteur:
         L = vision.LecteurInfobulle
         debut = time.monotonic()
         self.verifier_premier_plan()
+        self.circuit.recharger_si_modifie()      # points modifiés dans l'éditeur depuis le lancement
         frame = capture.grab()
         self.verifier_alertes(capture, frame)
         ident, score, pourquoi = self.circuit.reconnaitre(frame)

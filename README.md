@@ -49,24 +49,34 @@ sur **N** : la carte est photographiée (`circuit/photos/`). Une carte déjà
 photographiée est reconnue et n'est pas dupliquée.
 
 **2. Points de clic, automatiquement : touche K (recommandé).** Sur la carte,
-appuyez sur **K**. Le bot survole toutes les cellules, vite, **sans jamais
-cliquer**. Chaque fois qu'une infobulle « Faucher » ou « Épuisé » s'affiche, il
-lit le **nom de la céréale** et pose un point de clic à cet endroit, avec la
-bonne céréale. Une carte pas encore photographiée l'est automatiquement.
-- **Une céréale = un seul point.** Plusieurs cellules peuvent montrer la même
-  plante. Le bot la reconnaît par la position de son infobulle et par la
-  plante qui s'éclaircit au survol ; un seul des deux indices suffit.
-- **Deux passages** : le centre de chaque cellule, puis le haut des cellules
-  autour des céréales trouvées. Dans un champ dense, une céréale de derrière
-  n'est visible que par le haut.
+appuyez sur **K**. Le bot survole la carte, **sans jamais cliquer**, et pose
+un point de clic sur chaque céréale, avec la bonne céréale (nom lu dans
+l'infobulle). C'est exactement comme si vous cliquiez vous-même sur la photo de
+la carte dans l'éditeur. Une carte pas encore photographiée l'est
+automatiquement.
+1. **Repérage éclair** : la souris passe sur toutes les cellules sans
+   s'arrêter pour lire ; les cellules où une infobulle apparaît sont retenues.
+2. **Survol précis** de ces cellules seulement : lecture de « Faucher » /
+   « Épuisé » et du nom. Un nom déjà lu est reconnu instantanément.
+3. **Haut des cellules des champs** : dans un champ dense, une céréale de
+   derrière n'est visible que par le haut.
+
+- **Chaque point est enregistré sur la carte dès qu'il est trouvé** : un
+  arrêt (W, combat…) ne fait rien perdre. Relancez K pour terminer.
+- **Une céréale = un seul point** : la plante qui s'éclaircit au survol est
+  comparée à celles déjà trouvées. Relancer K n'ajoute que ce qui manque.
 - Arbres, fleurs… (« Épuisé » sans nom de céréale) : ignorés.
-- **Nom illisible** : le point est posé sans céréale (« ? » dans l'éditeur) et
-  n'est **jamais récolté**. Donnez-lui sa céréale (touche C) ou supprimez-le.
-  L'image de l'infobulle est enregistrée dans `debug/balayage_noms_illisibles/`.
-- **Relancer K** sur une carte n'ajoute que ce qui manque : les points déjà
-  posés sont survolés d'abord et jamais dupliqués.
-- Durée : environ 2 à 3 minutes par carte, une seule fois. Le temps d'attente
-  de l'infobulle s'ajuste au délai mesuré sur votre Mac (`balayage.attente`).
+- **Nom illisible** : point posé sans céréale (« ? » dans l'éditeur), **jamais
+  récolté**. Donnez-lui sa céréale (touche C) ou supprimez-le. Images dans
+  `debug/balayage_noms_illisibles/`.
+- Durée : environ 1 à 1,5 minute par carte au premier balayage. Le bot mesure
+  le délai d'apparition de l'infobulle sur votre Mac et le repérage devient
+  plus rapide ensuite (`circuit/delai_infobulle.json`, réglages dans
+  `config.yaml > balayage`).
+- **Combat** (agression, protecteur) : les cases de placement bleues sont
+  détectées, le bot s'arrête aussitôt avec un son (balayage et récolte).
+- L'éditeur peut rester ouvert : les points posés par le bot y apparaissent
+  dans la seconde, et vos modifications ne sont jamais écrasées.
 - P met en pause, W arrête. À la fin : bilan dans le terminal et image
   `debug/<date>/balayage.png` (vert = nouveaux points).
 
@@ -229,9 +239,12 @@ python main.py points --carte carte_003              # rouvre une carte précise
 Si vous changez la résolution ou le zoom du jeu, les points ne tombent plus
 au bon endroit : refaites les photos et les points.
 
-**Combat, niveau supérieur, inventaire plein.** Recadrez un élément
-caractéristique de chaque situation (le bouton « Prêt » ou la barre de combat,
-le titre de la fenêtre de niveau, le message d'inventaire plein) avec
+**Combat** : détecté automatiquement (cases de placement bleues), sans
+image à fournir (`securite.detecter_combat`).
+
+**Niveau supérieur, inventaire plein.** Recadrez un élément
+caractéristique de chaque situation (le titre de la fenêtre de niveau, le
+message d'inventaire plein) avec
 Cmd+Maj+4 et placez l'image dans `assets/alertes/`. Le bot vérifie ces images
 avant chaque clic et pendant l'attente de la file : si l'une apparaît, il
 s'arrête, joue un son et vous rend la main.
@@ -239,7 +252,8 @@ s'arrête, joue un son et vous rend la main.
 Le bot s'arrête, joue un son et vous rend la main dans ces cas :
 - carte non reconnue ;
 - plusieurs points d'affilée sans infobulle ;
-- une image de `assets/alertes/` est détectée (combat…) ;
+- un combat commence (cases de placement) ;
+- une image de `assets/alertes/` est détectée ;
 - une erreur survient.
 
 Si Dofus n'est plus au premier plan, il se met en **pause** (reprise avec P).

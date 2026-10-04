@@ -835,6 +835,16 @@ class LecteurInfobulle:
             return "eng"
 
 
+def combat_visible(frame: Frame, pixels_min: int = 3000) -> bool:
+    """Phase de placement d'un combat (agression, protecteur des céréales) :
+    les cases de placement bleu vif couvrent une grande surface, ce qui
+    n'arrive jamais sur une carte normale (eau = bleu clair peu saturé)."""
+    petit = frame.reduire(1.0) if frame.echelle > 1 else frame
+    hsv = cv2.cvtColor(petit.image, cv2.COLOR_BGR2HSV)
+    bleu = (hsv[:, :, 0] >= 100) & (hsv[:, :, 0] <= 120) & (hsv[:, :, 1] > 150) & (hsv[:, :, 2] > 170)
+    return int(np.count_nonzero(bleu)) / (petit.echelle ** 2) >= pixels_min
+
+
 # =============================================================================
 #  Surbrillance (ressources déjà dans la file) et alertes
 # =============================================================================

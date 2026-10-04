@@ -117,6 +117,9 @@ ecran:
 
 # --- Fenêtre / sécurité ------------------------------------------------------
 securite:
+  # Combat (agression, protecteur) : cases de placement bleues détectées ->
+  # arrêt immédiat + son, pendant la récolte et le balayage.
+  detecter_combat: true
   # Nom (ou partie du nom) de l'application au premier plan autorisée.
   applications_autorisees: ["Dofus"]
   verifier_premier_plan: true
@@ -235,11 +238,17 @@ infobulle:
   mots_epuisee: ["épuisée", "epuisee", "épuisé", "epuise"]
 
 # --- Balayage (touche K) -------------------------------------------------------
-# Le bot survole chaque cellule, sans cliquer, et pose un point de clic sur
-# chaque céréale qui affiche une infobulle (« Faucher » ou « Épuisé »), avec la
-# céréale lue dans l'infobulle. Une céréale = un seul point (reconnue par la
-# position de son infobulle). Nécessite Tesseract pour lire les noms.
+# Le bot survole la carte, sans cliquer, et pose un point de clic sur chaque
+# céréale qui affiche une infobulle (« Faucher » ou « Épuisé »), avec la céréale
+# lue dans l'infobulle. Une céréale = un seul point (même plante éclaircie au
+# survol). Chaque point est enregistré sur la carte dès qu'il est trouvé.
 balayage:
+  reperage_rapide: true         # 1) repérage éclair de toute la carte, 2) survol précis des céréales vues
+  pause_reperage: 0.06          # s par cellule au repérage (réduite au délai mesuré après le 1er balayage)
+  deplacement_reperage: 0.02    # s de déplacement d'une cellule à la suivante (repérage)
+  deplacement_precis: 0.04      # s de déplacement entre deux survols précis
+  # L'infobulle de Dofus 3 s'affiche à droite de la souris (à gauche près du bord).
+  zone_infobulle: {dx: -200, dy: -100, width: 400, height: 190}
   attente: 0.15                 # s max d'attente de l'infobulle par cellule (ajustée au délai mesuré)
   decalage_y: -6                # survol un peu au-dessus du centre de la cellule (points)
   second_passage: true          # 2e passage : haut des cellules autour des céréales trouvées
